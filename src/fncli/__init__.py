@@ -68,7 +68,7 @@ def cli(
                     parser.add_argument(pname, type=inner, nargs="+")
                 else:
                     parser.add_argument(
-                        *flag_names, dest=pname, type=inner, nargs="*", default=param.default or []
+                        *flag_names, dest=pname, type=inner, nargs="*", default=param.default
                     )
             elif raw is bool:
                 parser.add_argument(*flag_names, dest=pname, action="store_true", default=False)
