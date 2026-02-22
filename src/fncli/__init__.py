@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 _REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
+_REQUIRED_LISTS: dict[str, list[str]] = {}
 
 
 class UsageError(Exception):
@@ -85,7 +86,15 @@ def cli(
                     *flag_names, dest=pname, type=raw, default=param.default, required=False
                 )
 
+        required_lists = [
+            pname
+            for pname, param in sig.parameters.items()
+            if typing.get_origin(_unwrap_optional(param.annotation if param.annotation is not inspect.Parameter.empty else str)) is list
+            and param.default is inspect.Parameter.empty
+        ]
         _REGISTRY[key] = (fn, parser)
+        if required_lists:
+            _REQUIRED_LISTS[key] = required_lists
         return fn
 
     return decorator
@@ -93,6 +102,11 @@ def cli(
 
 def _dispatch_one(key: str, argv: list[str]) -> int:
     fn, parser = _REGISTRY[key]
+    required_lists = _REQUIRED_LISTS.get(key, [])
+    if required_lists and not any(a for a in argv if not a.startswith("-")):
+        names = ", ".join(f"<{n}>" for n in required_lists)
+        sys.stderr.write(f"{key}: {names} required. Run `{key} --help` for usage.\n")
+        return 1
     stderr_buf = io.StringIO()
     try:
         with redirect_stderr(stderr_buf):
