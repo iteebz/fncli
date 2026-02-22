@@ -95,6 +95,8 @@ def cli(
         _REGISTRY[key] = (fn, parser)
         if required_lists:
             _REQUIRED_LISTS[key] = required_lists
+        else:
+            _REQUIRED_LISTS.pop(key, None)
         return fn
 
     return decorator
