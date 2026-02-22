@@ -1,6 +1,6 @@
 """fncli — function signature as CLI spec.
 
-    from fncli import cli, dispatch
+    from fncli import cli, run, UsageError
 
     @cli("myapp")
     def status(all: bool = False):
@@ -23,19 +23,26 @@ from typing import Any
 _REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser, bool]] = {}
 
 
+class UsageError(Exception):
+    pass
+
+
 def _unwrap_optional(ann: Any) -> Any:
     if ann is type(None):
         return str
     if isinstance(ann, types.UnionType):
         args = [a for a in ann.__args__ if a is not type(None)]
         return args[0] if args else str
-    origin = typing.get_origin(ann)
-    if origin is typing.Union:
+    if typing.get_origin(ann) is typing.Union:
         args = [a for a in typing.get_args(ann) if a is not type(None)]
         return args[0] if args else str
-    if callable(ann):
-        return ann
-    return str
+    return ann if callable(ann) else str
+
+
+def _is_optional(ann: Any) -> bool:
+    if isinstance(ann, types.UnionType):
+        return type(None) in ann.__args__
+    return typing.get_origin(ann) is typing.Union and type(None) in typing.get_args(ann)
 
 
 def cli(
@@ -55,30 +62,24 @@ def cli(
         for pname, param in sig.parameters.items():
             ann = param.annotation
             raw = _unwrap_optional(ann) if ann is not inspect.Parameter.empty else str
-
-            origin = typing.get_origin(raw)
-            is_list = origin is list
+            is_list = typing.get_origin(raw) is list
             inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str
-
             flag = f"--{pname.replace('_', '-')}"
+            no_default = param.default is inspect.Parameter.empty
 
             if is_list:
-                if param.default is inspect.Parameter.empty:
+                if no_default:
                     parser.add_argument(pname, type=inner, nargs="+")
                 else:
                     parser.add_argument(flag, type=inner, nargs="*", default=param.default or [])
             elif raw is bool:
                 parser.add_argument(flag, action="store_true", default=False)
-            elif param.default is inspect.Parameter.empty:
+            elif no_default:
                 parser.add_argument(pname, type=raw)
             else:
-                default = param.default
-                ann = param.annotation
-                is_optional = (isinstance(ann, types.UnionType) and type(None) in ann.__args__) or (
-                    typing.get_origin(ann) is typing.Union and type(None) in typing.get_args(ann)
-                )
-                required = default is None and not is_optional
-                parser.add_argument(flag, type=raw, default=default, required=required)
+                is_optional = _is_optional(param.annotation)
+                required = param.default is None and not is_optional
+                parser.add_argument(flag, type=raw, default=param.default, required=required)
 
         _REGISTRY[key] = (fn, parser, internal)
         return fn
@@ -86,26 +87,37 @@ def cli(
     return decorator
 
 
+def _dispatch_one(key: str, argv: list[str]) -> int:
+    fn, parser, _internal = _REGISTRY[key]
+    stderr_buf = io.StringIO()
+    try:
+        with redirect_stderr(stderr_buf):
+            args = parser.parse_args(argv)
+    except SystemExit as e:
+        code = int(e.code) if e.code is not None else 1
+        stderr_out = stderr_buf.getvalue()
+        if stderr_out:
+            sys.stderr.write(stderr_out)
+        elif code != 0:
+            sys.stderr.write(f"{key}: invalid arguments. Run `{key} --help`.\n")
+        return code
+    try:
+        fn(**vars(args))
+        return 0
+    except UsageError as e:
+        sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
+        return 1
+    except Exception as e:
+        sys.stderr.write(f"{e}\n")
+        return 1
+
+
 def try_dispatch(argv: list[str]) -> int | None:
     """Try to dispatch argv. Returns exit code if matched, None if no match."""
     for depth in range(len(argv), 0, -1):
         key = " ".join(argv[:depth])
         if key in _REGISTRY:
-            fn, parser, _internal = _REGISTRY[key]
-            stderr_buf = io.StringIO()
-            try:
-                with redirect_stderr(stderr_buf):
-                    args = parser.parse_args(argv[depth:])
-            except SystemExit as e:
-                code = int(e.code) if e.code is not None else 1
-                stderr_out = stderr_buf.getvalue()
-                if stderr_out:
-                    sys.stderr.write(stderr_out)
-                elif code != 0:
-                    sys.stderr.write(f"{key}: invalid arguments. Run `{key} --help`.\n")
-                return code
-            fn(**vars(args))
-            return 0
+            return _dispatch_one(key, argv[depth:])
 
     if set(argv) & {"-h", "--help"}:
         prefix = " ".join(a for a in argv if a not in ("-h", "--help"))
@@ -133,6 +145,12 @@ def dispatch(argv: list[str]) -> int:
     known = sorted(_REGISTRY)
     sys.stdout.write("known commands:\n" + "\n".join(f"  {k}" for k in known) + "\n")
     return 1
+
+
+def run(argv: list[str] | None = None) -> None:
+    """Full entrypoint: dispatch argv, handle errors, exit."""
+    code = dispatch(argv if argv is not None else sys.argv[1:])
+    sys.exit(code)
 
 
 def command_map() -> dict[str, bool]:
