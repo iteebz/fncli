@@ -100,8 +100,8 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
             sys.stderr.write(f"{key}: invalid arguments. Run `{key} --help`.\n")
         return code
     try:
-        fn(**vars(args))
-        return 0
+        result = fn(**vars(args))
+        return result if isinstance(result, int) else 0
     except UsageError as e:
         sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
         return 1

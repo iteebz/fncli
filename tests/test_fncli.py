@@ -210,6 +210,27 @@ def test_dispatch_parent_called_with_flag_even_with_subcommands():
     assert order == ["app:True"]
 
 
+# --- return value propagation ---
+
+
+def test_int_return_propagates():
+    @cli()
+    def fail():
+        return 1
+
+    @cli()
+    def succeed():
+        return 0
+
+    @cli()
+    def none_return():
+        pass
+
+    assert dispatch(["fail"]) == 1
+    assert dispatch(["succeed"]) == 0
+    assert dispatch(["none-return"]) == 0
+
+
 # --- UsageError ---
 
 
