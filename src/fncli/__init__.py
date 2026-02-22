@@ -48,6 +48,7 @@ def cli(
     name: str | None = None,
     description: str | None = None,
     flags: dict[str, list[str]] | None = None,
+    aliases: list[str] | None = None,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         _name = name if name is not None else fn.__name__.replace("_", "-")
@@ -97,6 +98,13 @@ def cli(
             _REQUIRED_LISTS[key] = required_lists
         else:
             _REQUIRED_LISTS.pop(key, None)
+        for alias in aliases or []:
+            alias_key = f"{parent} {alias}".strip() if parent else alias
+            _REGISTRY[alias_key] = (fn, parser)
+            if required_lists:
+                _REQUIRED_LISTS[alias_key] = required_lists
+            else:
+                _REQUIRED_LISTS.pop(alias_key, None)
         return fn
 
     return decorator
