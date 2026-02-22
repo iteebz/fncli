@@ -57,22 +57,8 @@ select = [
     "PLC",    # pylint conventions
 ]
 ignore = [
-    "SIM108",   # ternary not always clearer
-    "SIM115",   # context manager not always clearer
-    "SIM117",   # multiple with statements
-    "E501",     # line length (formatter handles)
-    "COM812",   # trailing commas (formatter)
-    "D100", "D101", "D102", "D103", "D104", "D107",
-    "D202", "D209", "D212", "D213", "D401", "D413", "D417",
-    "ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN401",
-    "FBT001", "FBT002", "FBT003",
-    "EM101", "EM102",
-    "TRY003", "TRY300", "TRY301", "TRY400", "TRY401",
-    "G004", "G201",
-    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2004",
-    "ARG001", "ARG004",
-    "C901",
-    "BLE001",
+    "E501",   # line length (formatter handles)
+    "ANN401", # Any is required for annotation introspection
 ]
 
 [tool.ruff.lint.per-file-ignores]
