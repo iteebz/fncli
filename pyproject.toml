@@ -10,7 +10,8 @@ requires-python = ">=3.12"
 dependencies = []
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fncli"]
+include = ["src/fncli.py"]
+sources = ["src"]
 
 [dependency-groups]
 dev = [
