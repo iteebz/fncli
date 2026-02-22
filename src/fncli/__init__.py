@@ -47,15 +47,16 @@ def _is_optional(ann: Any) -> bool:
 
 def cli(
     parent: str | None = None,
-    description: str | None = None,
+    desc: str | None = None,
     name: str | None = None,
+    internal: bool = False,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         _name = name if name is not None else fn.__name__.replace("_", "-")
         key = f"{parent} {_name}".strip() if parent else _name
-        desc = description or fn.__doc__ or ""
+        _desc = desc or fn.__doc__ or ""
 
-        parser = argparse.ArgumentParser(prog=key, description=desc, add_help=True)
+        parser = argparse.ArgumentParser(prog=key, description=_desc, add_help=True)
         sig = inspect.signature(fn)
 
         for pname, param in sig.parameters.items():
