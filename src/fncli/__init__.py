@@ -62,8 +62,10 @@ def cli(
             raw = _unwrap_optional(ann) if ann is not inspect.Parameter.empty else str
             is_list = typing.get_origin(raw) is list
             inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str
-            flag_names = _flags.get(pname) or [f"--{pname.replace('_', '-')}"]
+            explicit_flags = _flags.get(pname)
+            flag_names = explicit_flags or [f"--{pname.replace('_', '-')}"]
             no_default = param.default is inspect.Parameter.empty
+            positional_optional = explicit_flags == [] and not no_default
 
             if is_list:
                 if no_default:
@@ -74,6 +76,8 @@ def cli(
                     )
             elif raw is bool:
                 parser.add_argument(*flag_names, dest=pname, action="store_true", default=False)
+            elif positional_optional:
+                parser.add_argument(pname, type=raw, nargs="?", default=param.default)
             elif no_default:
                 parser.add_argument(pname, type=raw)
             else:
@@ -125,21 +129,25 @@ def try_dispatch(argv: list[str]) -> int | None:
                 continue
             return _dispatch_one(key, remaining)
 
-    if _HELP_FLAGS & set(argv):
-        prefix = " ".join(a for a in argv if a not in _HELP_FLAGS)
-        matches = sorted(
-            (key, parser.description or "")
-            for key, (_, parser) in _REGISTRY.items()
-            if key.startswith(prefix + " ") or key == prefix
-        )
-        if matches:
-            col = max((len(k) - len(prefix) - 1 for k, _ in matches), default=0)
-            sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
-            for key, desc in matches:
-                cmd = key[len(prefix) :].lstrip()
-                sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
-            sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
-            return 0
+    has_help = bool(_HELP_FLAGS & set(argv))
+    non_help = [a for a in argv if a not in _HELP_FLAGS]
+    prefix = " ".join(non_help)
+    if len(non_help) <= 1 and not has_help:
+        return None
+
+    matches = sorted(
+        (key, parser.description or "")
+        for key, (_, parser) in _REGISTRY.items()
+        if key.startswith(prefix + " ") or key == prefix
+    )
+    if matches:
+        col = max((len(k) - len(prefix) - 1 for k, _ in matches), default=0)
+        sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
+        for key, desc in matches:
+            cmd = key[len(prefix) :].lstrip()
+            sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
+        sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
+        return 0 if has_help else 1
 
     return None
 
