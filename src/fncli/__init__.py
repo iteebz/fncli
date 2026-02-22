@@ -107,30 +107,29 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
     except UsageError as e:
         sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
         return 1
-    except Exception as e:
-        sys.stderr.write(f"{e}\n")
-        return 1
+
+
+_HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
 def try_dispatch(argv: list[str]) -> int | None:
-    """Try to dispatch argv. Returns exit code if matched, None if no match."""
     for depth in range(len(argv), 0, -1):
         key = " ".join(argv[:depth])
         if key in _REGISTRY:
             return _dispatch_one(key, argv[depth:])
 
-    if set(argv) & {"-h", "--help"}:
-        prefix = " ".join(a for a in argv if a not in ("-h", "--help"))
+    if _HELP_FLAGS & set(argv):
+        prefix = " ".join(a for a in argv if a not in _HELP_FLAGS)
         matches = sorted(
             (key, parser.description or "")
             for key, (_, parser, _int) in _REGISTRY.items()
             if key.startswith(prefix + " ") or key == prefix
         )
         if matches:
-            col = max(len(k) - len(prefix) - 1 for k, _ in matches)
+            col = max((len(k) - len(prefix) - 1 for k, _ in matches), default=0)
             sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
             for key, desc in matches:
-                cmd = key[len(prefix):].lstrip()
+                cmd = key[len(prefix) :].lstrip()
                 sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
             sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
             return 0
@@ -148,11 +147,9 @@ def dispatch(argv: list[str]) -> int:
 
 
 def run(argv: list[str] | None = None) -> None:
-    """Full entrypoint: dispatch argv, handle errors, exit."""
     code = dispatch(argv if argv is not None else sys.argv[1:])
     sys.exit(code)
 
 
-def command_map() -> dict[str, bool]:
-    """Return {command_key: is_internal} for all registered commands."""
-    return {key: internal for key, (_, _, internal) in _REGISTRY.items()}
+def commands() -> list[str]:
+    return sorted(_REGISTRY)
