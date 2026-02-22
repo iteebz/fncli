@@ -106,6 +106,19 @@ def test_required_flag_when_non_optional_none_default():
     assert captured[-1] == "prod"
 
 
+def test_bare_none_default_not_required():
+    captured: list = []
+
+    @cli()
+    def deploy(env: str = None):  # type: ignore[assignment]  # noqa: RUF013
+        captured.append(env)
+
+    assert dispatch(["deploy"]) == 0
+    assert captured[-1] is None
+    assert dispatch(["deploy", "--env", "prod"]) == 0
+    assert captured[-1] == "prod"
+
+
 def test_list_positional():
     captured: list[list[str]] = []
 

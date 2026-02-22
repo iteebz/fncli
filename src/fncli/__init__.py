@@ -39,11 +39,6 @@ def _unwrap_optional(ann: Any) -> Any:
     return ann if callable(ann) else str
 
 
-def _is_optional(ann: Any) -> bool:
-    if isinstance(ann, types.UnionType):
-        return type(None) in ann.__args__
-    return typing.get_origin(ann) is typing.Union and type(None) in typing.get_args(ann)
-
 
 def cli(
     parent: str | None = None,
@@ -77,9 +72,7 @@ def cli(
             elif no_default:
                 parser.add_argument(pname, type=raw)
             else:
-                is_optional = _is_optional(param.annotation)
-                required = param.default is None and not is_optional
-                parser.add_argument(flag, type=raw, default=param.default, required=required)
+                parser.add_argument(flag, type=raw, default=param.default, required=False)
 
         _REGISTRY[key] = (fn, parser)
         return fn
