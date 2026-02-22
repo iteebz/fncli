@@ -20,7 +20,7 @@ from collections.abc import Callable
 from contextlib import redirect_stderr
 from typing import Any
 
-_REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser, bool]] = {}
+_REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
 
 
 class UsageError(Exception):
@@ -49,7 +49,6 @@ def cli(
     parent: str | None = None,
     description: str | None = None,
     name: str | None = None,
-    internal: bool = False,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         _name = name if name is not None else fn.__name__.replace("_", "-")
@@ -81,14 +80,14 @@ def cli(
                 required = param.default is None and not is_optional
                 parser.add_argument(flag, type=raw, default=param.default, required=required)
 
-        _REGISTRY[key] = (fn, parser, internal)
+        _REGISTRY[key] = (fn, parser)
         return fn
 
     return decorator
 
 
 def _dispatch_one(key: str, argv: list[str]) -> int:
-    fn, parser, _internal = _REGISTRY[key]
+    fn, parser = _REGISTRY[key]
     stderr_buf = io.StringIO()
     try:
         with redirect_stderr(stderr_buf):
@@ -129,7 +128,7 @@ def try_dispatch(argv: list[str]) -> int | None:
         prefix = " ".join(a for a in argv if a not in _HELP_FLAGS)
         matches = sorted(
             (key, parser.description or "")
-            for key, (_, parser, _int) in _REGISTRY.items()
+            for key, (_, parser) in _REGISTRY.items()
             if key.startswith(prefix + " ") or key == prefix
         )
         if matches:
