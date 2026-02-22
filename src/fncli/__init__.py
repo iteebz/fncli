@@ -72,6 +72,8 @@ def cli(
             if is_list:
                 if no_default:
                     parser.add_argument(pname, type=inner, nargs="+")
+                elif positional_optional:
+                    parser.add_argument(pname, type=inner, nargs="*", default=param.default)
                 else:
                     parser.add_argument(
                         *flag_names, dest=pname, type=inner, nargs="*", default=param.default
