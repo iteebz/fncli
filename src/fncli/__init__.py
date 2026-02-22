@@ -39,19 +39,19 @@ def _unwrap_optional(ann: Any) -> Any:
     return ann if callable(ann) else str
 
 
-
 def cli(
     parent: str | None = None,
-    desc: str | None = None,
+    description: str | None = None,
     name: str | None = None,
-    internal: bool = False,
+    flags: dict[str, list[str]] | None = None,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         _name = name if name is not None else fn.__name__.replace("_", "-")
         key = f"{parent} {_name}".strip() if parent else _name
-        _desc = desc or fn.__doc__ or ""
+        desc = description or fn.__doc__ or ""
+        _flags = flags or {}
 
-        parser = argparse.ArgumentParser(prog=key, description=_desc, add_help=True)
+        parser = argparse.ArgumentParser(prog=key, description=desc, add_help=True)
         sig = inspect.signature(fn)
 
         for pname, param in sig.parameters.items():
@@ -59,20 +59,24 @@ def cli(
             raw = _unwrap_optional(ann) if ann is not inspect.Parameter.empty else str
             is_list = typing.get_origin(raw) is list
             inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str
-            flag = f"--{pname.replace('_', '-')}"
+            flag_names = _flags.get(pname) or [f"--{pname.replace('_', '-')}"]
             no_default = param.default is inspect.Parameter.empty
 
             if is_list:
                 if no_default:
                     parser.add_argument(pname, type=inner, nargs="+")
                 else:
-                    parser.add_argument(flag, type=inner, nargs="*", default=param.default or [])
+                    parser.add_argument(
+                        *flag_names, dest=pname, type=inner, nargs="*", default=param.default or []
+                    )
             elif raw is bool:
-                parser.add_argument(flag, action="store_true", default=False)
+                parser.add_argument(*flag_names, dest=pname, action="store_true", default=False)
             elif no_default:
                 parser.add_argument(pname, type=raw)
             else:
-                parser.add_argument(flag, type=raw, default=param.default, required=False)
+                parser.add_argument(
+                    *flag_names, dest=pname, type=raw, default=param.default, required=False
+                )
 
         _REGISTRY[key] = (fn, parser)
         return fn
