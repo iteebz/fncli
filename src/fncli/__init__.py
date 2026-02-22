@@ -11,6 +11,7 @@ The function IS the interface. Signature → argparse. Docstring → help.
 """
 
 import argparse
+import importlib
 import inspect
 import io
 import sys
@@ -18,6 +19,7 @@ import types
 import typing
 from collections.abc import Callable
 from contextlib import redirect_stderr
+from pathlib import Path
 from typing import Any
 
 _REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
@@ -158,3 +160,17 @@ def run(argv: list[str] | None = None) -> None:
 
 def commands() -> list[str]:
     return sorted(_REGISTRY)
+
+
+def autodiscover(package_root: Path, package_name: str) -> None:
+    for path in sorted(package_root.rglob("*.py")):
+        try:
+            if "@cli(" not in path.read_text():
+                continue
+        except OSError:
+            continue
+        rel = path.relative_to(package_root.parent)
+        mod = ".".join(rel.with_suffix("").parts)
+        if not mod.startswith(package_name + "."):
+            continue
+        importlib.import_module(mod)
