@@ -92,7 +92,12 @@ def cli(
         required_lists = [
             pname
             for pname, param in sig.parameters.items()
-            if typing.get_origin(_unwrap_optional(param.annotation if param.annotation is not inspect.Parameter.empty else str)) is list
+            if typing.get_origin(
+                _unwrap_optional(
+                    param.annotation if param.annotation is not inspect.Parameter.empty else str
+                )
+            )
+            is list
             and param.default is inspect.Parameter.empty
         ]
         _REGISTRY[key] = (fn, parser)
@@ -195,6 +200,10 @@ def try_dispatch(argv: list[str]) -> int | None:
             sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
         sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
         return 0 if has_help else 1
+
+    if non_help:
+        sys.stderr.write(f"Unknown command: {prefix}\nRun `{argv[0]} --help` for usage.\n")
+        return 1
 
     return None
 
