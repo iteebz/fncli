@@ -212,8 +212,11 @@ def dispatch(argv: list[str]) -> int:
     result = try_dispatch(argv)
     if result is not None:
         return result
-    known = sorted(_REGISTRY)
-    sys.stdout.write("known commands:\n" + "\n".join(f"  {k}" for k in known) + "\n")
+    known = sorted((k, p.description or "") for k, (_, p) in _REGISTRY.items())
+    col = max((len(k) for k, _ in known), default=0)
+    sys.stdout.write("commands:\n")
+    for k, desc in known:
+        sys.stdout.write(f"  {k:<{col}}  {desc}\n")
     return 1
 
 
