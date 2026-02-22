@@ -107,7 +107,28 @@ def cli(
                 _REQUIRED_LISTS[alias_key] = required_lists
             else:
                 _REQUIRED_LISTS.pop(alias_key, None)
-        return fn
+
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if args or kwargs:
+                return fn(*args, **kwargs)
+            stderr_buf = io.StringIO()
+            try:
+                with redirect_stderr(stderr_buf):
+                    parsed = parser.parse_args(sys.argv[1:])
+            except SystemExit as e:
+                stderr_out = stderr_buf.getvalue()
+                if stderr_out:
+                    sys.stderr.write(stderr_out)
+                sys.exit(e.code)
+            try:
+                result = fn(**vars(parsed))
+                sys.exit(result if isinstance(result, int) else 0)
+            except UsageError as e:
+                sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
+                sys.exit(1)
+
+        wrapper.__wrapped__ = fn  # type: ignore[attr-defined]
+        return wrapper
 
     return decorator
 
