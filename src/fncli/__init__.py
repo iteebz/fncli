@@ -112,11 +112,18 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
+def _has_subcommands(prefix: str) -> bool:
+    return any(k.startswith(prefix + " ") for k in _REGISTRY)
+
+
 def try_dispatch(argv: list[str]) -> int | None:
     for depth in range(len(argv), 0, -1):
         key = " ".join(argv[:depth])
         if key in _REGISTRY:
-            return _dispatch_one(key, argv[depth:])
+            remaining = argv[depth:]
+            if remaining and not remaining[0].startswith("-") and _has_subcommands(key):
+                continue
+            return _dispatch_one(key, remaining)
 
     if _HELP_FLAGS & set(argv):
         prefix = " ".join(a for a in argv if a not in _HELP_FLAGS)
