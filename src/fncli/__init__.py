@@ -41,8 +41,9 @@ def _unwrap_optional(ann: Any) -> Any:
 
 def cli(
     parent: str | None = None,
-    description: str | None = None,
+    *,
     name: str | None = None,
+    description: str | None = None,
     flags: dict[str, list[str]] | None = None,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
