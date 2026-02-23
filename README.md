@@ -90,6 +90,17 @@ fncli.dispatch(argv)      # returns exit code, prints help if no match
 fncli.run()               # dispatch + sys.exit
 ```
 
+## Selftest
+
+Every CLI gets a hidden `selftest` command for free:
+
+```
+$ myapp selftest          # smoke-test --help on all commands
+$ myapp selftest --live   # also run readonly no-arg commands
+```
+
+Hidden from `--help`. Useful in CI: `uv run myapp selftest`.
+
 ## API
 
 | function | |
@@ -104,4 +115,4 @@ fncli.run()               # dispatch + sys.exit
 | `commands()` | sorted registered keys |
 | `entries()` | (key, fn, parser) tuples |
 
-One file. ~340 lines. No dependencies.
+One file. ~390 lines. No dependencies.

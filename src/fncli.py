@@ -19,7 +19,7 @@ import sys
 import types
 import typing
 from collections.abc import Callable
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -178,12 +178,68 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
+def _selftest(prog: str, live: bool = False) -> int:
+    import traceback
+
+    prefix = prog + " "
+    results: list[dict[str, str]] = []
+
+    for key, fn, parser in entries():
+        if key != prog and not key.startswith(prefix):
+            continue
+
+        result: dict[str, str] = {"command": key, "help": "skip", "live": "skip"}
+
+        try:
+            with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                parser.parse_args(["--help"])
+        except SystemExit as e:
+            result["help"] = "pass" if e.code == 0 else "FAIL"
+        except Exception:
+            result["help"] = "FAIL"
+
+        if live and is_readonly(key):
+            sig = inspect.signature(fn)
+            if not any(p.default is inspect.Parameter.empty for p in sig.parameters.values()):
+                try:
+                    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                        ret = fn()
+                    result["live"] = "pass" if (ret is None or ret == 0) else f"FAIL(rc={ret})"
+                except SystemExit as e:
+                    result["live"] = "pass" if e.code == 0 else f"FAIL(exit={e.code})"
+                except Exception as e:
+                    result["live"] = f"FAIL({type(e).__name__})"
+                    traceback.print_exc(file=sys.stderr)
+
+        results.append(result)
+
+    if not results:
+        sys.stderr.write(f"{prog} selftest: no commands registered\n")
+        return 1
+
+    col = max(len(r["command"]) for r in results)
+    for r in results:
+        h = "✓" if r["help"] == "pass" else ("·" if r["help"] == "skip" else "✗")
+        lv = "✓" if r["live"] == "pass" else ("·" if r["live"] == "skip" else "✗")
+        line = f"  {r['command']:<{col}}  help={h}  live={lv}"
+        if "FAIL" in r.get("live", ""):
+            line += f"  ({r['live']})"
+        print(line)
+
+    failed = sum(1 for r in results if "FAIL" in r["help"] or "FAIL" in r.get("live", ""))
+    total = len(results)
+    print(f"\n{total - failed}/{total} passed" + (f"  ({failed} failed)" if failed else ""))
+    return 1 if failed else 0
+
+
 def _subcommand_matches(prefix: str, token: str) -> bool:
     candidate = prefix + " " + token
     return any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
 
 
 def try_dispatch(argv: list[str]) -> int | None:
+    if len(argv) >= 2 and argv[1] == "selftest":
+        return _selftest(argv[0], live="--live" in argv[2:])
     for depth in range(len(argv), 0, -1):
         key = " ".join(argv[:depth])
         if key in _REGISTRY:

@@ -295,3 +295,49 @@ def test_commands_returns_sorted():
 
 def test_commands_empty():
     assert commands() == []
+
+
+# --- selftest ---
+
+
+def test_selftest_passes_for_valid_commands(capsys):
+    @cli("myapp")
+    def status():
+        """show status"""
+
+    @cli("myapp")
+    def deploy(target: str):
+        """deploy to target"""
+
+    result = try_dispatch(["myapp", "selftest"])
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "2/2 passed" in out
+
+
+def test_selftest_hidden_from_help(capsys):
+    @cli("myapp")
+    def status():
+        """show status"""
+
+    try_dispatch(["myapp", "--help"])
+    out = capsys.readouterr().out
+    assert "selftest" not in out
+
+
+def test_selftest_no_commands_returns_one(capsys):
+    result = try_dispatch(["ghost", "selftest"])
+    assert result == 1
+
+
+def test_selftest_live_flag_runs_readonly(capsys):
+    ran: list[bool] = []
+
+    @cli("myapp", readonly=True)
+    def ping():
+        """check connectivity"""
+        ran.append(True)
+
+    result = try_dispatch(["myapp", "selftest", "--live"])
+    assert result == 0
+    assert ran == [True]
