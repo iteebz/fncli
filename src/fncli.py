@@ -25,6 +25,7 @@ from typing import Any
 
 _REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
 _REQUIRED_LISTS: dict[str, list[str]] = {}
+_READONLY: dict[str, bool] = {}
 
 
 class UsageError(Exception):
@@ -51,6 +52,7 @@ def cli(
     flags: dict[str, list[str]] | None = None,
     aliases: list[str] | None = None,
     default: bool = False,
+    readonly: bool = False,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         _name = name if name is not None else fn.__name__.replace("_", "-")
@@ -103,6 +105,8 @@ def cli(
             and param.default is inspect.Parameter.empty
         ]
         _REGISTRY[key] = (fn, parser)
+        if readonly:
+            _READONLY[key] = True
         if required_lists:
             _REQUIRED_LISTS[key] = required_lists
         else:
@@ -112,6 +116,8 @@ def cli(
         for alias in aliases or []:
             alias_key = f"{parent} {alias}".strip() if parent else alias
             _REGISTRY[alias_key] = (fn, parser)
+            if readonly:
+                _READONLY[alias_key] = True
             if required_lists:
                 _REQUIRED_LISTS[alias_key] = required_lists
             else:
@@ -308,6 +314,14 @@ def alias_namespace(src: str, dst: str) -> None:
 
 def commands() -> list[str]:
     return sorted(_REGISTRY)
+
+
+def is_readonly(key: str) -> bool:
+    return _READONLY.get(key, False)
+
+
+def readonly_commands() -> list[str]:
+    return sorted(k for k in _REGISTRY if _READONLY.get(k, False))
 
 
 def entries() -> list[tuple[str, "Callable[..., Any]", "argparse.ArgumentParser"]]:
