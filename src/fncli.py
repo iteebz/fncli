@@ -212,22 +212,30 @@ def _collapse_commands(prefix: str, matches: list[tuple[str, str]]) -> list[tupl
     seen: set[str] = set()
     lines: list[tuple[str, str]] = []
     for key, desc in matches:
-        relative = key[len(prefix):].lstrip()
+        relative = key[len(prefix) :].lstrip()
         parts = relative.split(" ", 1)
         token = parts[0]
         if token in seen:
             continue
         seen.add(token)
         if len(parts) == 1:
-            subcommands = [k for k, _ in matches if k[len(prefix):].lstrip().startswith(token + " ")]
+            subcommands = [
+                k for k, _ in matches if k[len(prefix) :].lstrip().startswith(token + " ")
+            ]
             if subcommands:
                 group_desc = f"{token} commands  (run `{prefix} {token} --help`)"
                 lines.append((token, group_desc))
             else:
                 lines.append((token, desc))
         else:
-            subcommands = [k for k, _ in matches if k[len(prefix):].lstrip().startswith(token + " ")]
-            group_desc = f"{token} commands  (run `{prefix} {token} --help`)" if len(subcommands) > 1 else desc
+            subcommands = [
+                k for k, _ in matches if k[len(prefix) :].lstrip().startswith(token + " ")
+            ]
+            group_desc = (
+                f"{token} commands  (run `{prefix} {token} --help`)"
+                if len(subcommands) > 1
+                else desc
+            )
             lines.append((token, group_desc))
     return lines
 
