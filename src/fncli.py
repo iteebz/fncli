@@ -168,8 +168,9 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
-def _has_subcommands(prefix: str) -> bool:
-    return any(k.startswith(prefix + " ") for k in _REGISTRY)
+def _subcommand_matches(prefix: str, token: str) -> bool:
+    candidate = prefix + " " + token
+    return any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
 
 
 def try_dispatch(argv: list[str]) -> int | None:
@@ -177,7 +178,11 @@ def try_dispatch(argv: list[str]) -> int | None:
         key = " ".join(argv[:depth])
         if key in _REGISTRY:
             remaining = argv[depth:]
-            if remaining and not remaining[0].startswith("-") and _has_subcommands(key):
+            if (
+                remaining
+                and not remaining[0].startswith("-")
+                and _subcommand_matches(key, remaining[0])
+            ):
                 continue
             return _dispatch_one(key, remaining)
 
@@ -258,6 +263,23 @@ def dispatch(argv: list[str]) -> int:
 def run(argv: list[str] | None = None) -> None:
     code = dispatch(argv if argv is not None else sys.argv[1:])
     sys.exit(code)
+
+
+def alias_namespace(src: str, dst: str) -> None:
+    """Register all commands under `src` namespace also under `dst`.
+
+    Example: alias_namespace("life log", "life add") makes `life add a`
+    dispatch the same function as `life log a`.
+    """
+    prefix = src + " "
+    to_add = {
+        dst + key[len(src) :]: val for key, val in list(_REGISTRY.items()) if key.startswith(prefix)
+    }
+    _REGISTRY.update(to_add)
+    for alias_key in to_add:
+        orig_key = src + alias_key[len(dst) :]
+        if orig_key in _REQUIRED_LISTS:
+            _REQUIRED_LISTS[alias_key] = _REQUIRED_LISTS[orig_key]
 
 
 def commands() -> list[str]:
