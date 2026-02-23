@@ -193,10 +193,10 @@ def try_dispatch(argv: list[str]) -> int | None:
         if key.startswith(prefix + " ") or key == prefix
     )
     if matches:
-        col = max((len(k) - len(prefix) - 1 for k, _ in matches), default=0)
+        lines = _collapse_commands(prefix, matches)
+        col = max((len(cmd) for cmd, _ in lines), default=0)
         sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
-        for key, desc in matches:
-            cmd = key[len(prefix) :].lstrip()
+        for cmd, desc in lines:
             sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
         sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
         return 0 if has_help else 1
@@ -208,15 +208,42 @@ def try_dispatch(argv: list[str]) -> int | None:
     return None
 
 
+def _collapse_commands(prefix: str, matches: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    seen: set[str] = set()
+    lines: list[tuple[str, str]] = []
+    for key, desc in matches:
+        relative = key[len(prefix):].lstrip()
+        parts = relative.split(" ", 1)
+        token = parts[0]
+        if token in seen:
+            continue
+        seen.add(token)
+        if len(parts) == 1:
+            subcommands = [k for k, _ in matches if k[len(prefix):].lstrip().startswith(token + " ")]
+            if subcommands:
+                group_desc = f"{token} commands  (run `{prefix} {token} --help`)"
+                lines.append((token, group_desc))
+            else:
+                lines.append((token, desc))
+        else:
+            subcommands = [k for k, _ in matches if k[len(prefix):].lstrip().startswith(token + " ")]
+            group_desc = f"{token} commands  (run `{prefix} {token} --help`)" if len(subcommands) > 1 else desc
+            lines.append((token, group_desc))
+    return lines
+
+
 def dispatch(argv: list[str]) -> int:
     result = try_dispatch(argv)
     if result is not None:
         return result
-    known = sorted((k, p.description or "") for k, (_, p) in _REGISTRY.items())
-    col = max((len(k) for k, _ in known), default=0)
-    sys.stdout.write("commands:\n")
-    for k, desc in known:
-        sys.stdout.write(f"  {k:<{col}}  {desc}\n")
+    prog = argv[0] if argv else "app"
+    all_keys = sorted((k, p.description or "") for k, (_, p) in _REGISTRY.items())
+    lines = _collapse_commands(prog, [(f"{prog} {k}", desc) for k, desc in all_keys])
+    col = max((len(cmd) for cmd, _ in lines), default=0)
+    sys.stdout.write(f"usage: {prog} <command> [args]\n\ncommands:\n")
+    for cmd, desc in lines:
+        sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
+    sys.stdout.write(f"\nRun `{prog} <command> --help` for details.\n")
     return 1
 
 

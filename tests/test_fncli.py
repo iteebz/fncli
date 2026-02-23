@@ -273,9 +273,9 @@ def test_help_lists_subcommands(capsys):
     assert "stop" in out
 
 
-def test_help_unknown_prefix_returns_none():
+def test_help_unknown_prefix_returns_error():
     result = try_dispatch(["ghost", "--help"])
-    assert result is None
+    assert result == 1
 
 
 # --- commands() ---
