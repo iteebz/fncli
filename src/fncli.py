@@ -49,6 +49,7 @@ def cli(
     description: str | None = None,
     flags: dict[str, list[str]] | None = None,
     aliases: list[str] | None = None,
+    default: bool = False,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         _name = name if name is not None else fn.__name__.replace("_", "-")
@@ -105,6 +106,8 @@ def cli(
             _REQUIRED_LISTS[key] = required_lists
         else:
             _REQUIRED_LISTS.pop(key, None)
+        if default and parent:
+            _REGISTRY[parent] = (fn, parser)
         for alias in aliases or []:
             alias_key = f"{parent} {alias}".strip() if parent else alias
             _REGISTRY[alias_key] = (fn, parser)
@@ -284,6 +287,10 @@ def alias_namespace(src: str, dst: str) -> None:
 
 def commands() -> list[str]:
     return sorted(_REGISTRY)
+
+
+def entries() -> list[tuple[str, "Callable[..., Any]", "argparse.ArgumentParser"]]:
+    return [(key, fn, parser) for key, (fn, parser) in sorted(_REGISTRY.items())]
 
 
 def autodiscover(package_root: Path, package_name: str) -> None:
