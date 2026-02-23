@@ -415,6 +415,8 @@ def autodiscover(package_root: Path, package_name: str) -> None:
                 continue
         except OSError:
             continue
-        rel = path.relative_to(package_root)
-        mod = package_name + "." + ".".join(rel.with_suffix("").parts)
+        rel = path.relative_to(package_root.parent)
+        mod = ".".join(rel.with_suffix("").parts)
+        if not mod.startswith(package_name + "."):
+            continue
         importlib.import_module(mod)
