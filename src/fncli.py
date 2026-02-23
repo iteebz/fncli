@@ -11,6 +11,7 @@ The function IS the interface. Signature → argparse. Docstring → help.
 """
 
 import argparse
+import difflib
 import importlib
 import inspect
 import io
@@ -210,7 +211,15 @@ def try_dispatch(argv: list[str]) -> int | None:
         return 0 if has_help else 1
 
     if non_help:
-        sys.stderr.write(f"Unknown command: {prefix}\nRun `{argv[0]} --help` for usage.\n")
+        known = list(_REGISTRY)
+        close = difflib.get_close_matches(prefix, known, n=3, cutoff=0.5)
+        if close:
+            hint = ", ".join(close)
+            sys.stderr.write(
+                f"Unknown command: {prefix}. Did you mean: {hint}?\nRun `{argv[0]} --help` for usage.\n"
+            )
+        else:
+            sys.stderr.write(f"Unknown command: {prefix}\nRun `{argv[0]} --help` for usage.\n")
         return 1
 
     return None
