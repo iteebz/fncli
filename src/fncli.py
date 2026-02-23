@@ -16,6 +16,7 @@ import importlib
 import inspect
 import io
 import sys
+import traceback
 import types
 import typing
 from collections.abc import Callable
@@ -186,8 +187,6 @@ _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
 def _selftest(prog: str, live: bool = False) -> int:
-    import traceback
-
     prefix = prog + " "
     results: list[dict[str, str]] = []
 
@@ -231,11 +230,13 @@ def _selftest(prog: str, live: bool = False) -> int:
         line = f"  {r['command']:<{col}}  help={h}  live={lv}"
         if "FAIL" in r.get("live", ""):
             line += f"  ({r['live']})"
-        print(line)
+        sys.stdout.write(line + "\n")
 
     failed = sum(1 for r in results if "FAIL" in r["help"] or "FAIL" in r.get("live", ""))
     total = len(results)
-    print(f"\n{total - failed}/{total} passed" + (f"  ({failed} failed)" if failed else ""))
+    sys.stdout.write(
+        f"\n{total - failed}/{total} passed" + (f"  ({failed} failed)" if failed else "") + "\n"
+    )
     return 1 if failed else 0
 
 
@@ -414,8 +415,6 @@ def autodiscover(package_root: Path, package_name: str) -> None:
                 continue
         except OSError:
             continue
-        rel = path.relative_to(package_root.parent)
-        mod = ".".join(rel.with_suffix("").parts)
-        if not mod.startswith(package_name + "."):
-            continue
+        rel = path.relative_to(package_root)
+        mod = package_name + "." + ".".join(rel.with_suffix("").parts)
         importlib.import_module(mod)
