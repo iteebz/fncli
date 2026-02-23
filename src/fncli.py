@@ -409,13 +409,17 @@ def entries() -> list[tuple[str, "Callable[..., Any]", "argparse.ArgumentParser"
 
 
 def autodiscover(package_root: Path, package_name: str) -> None:
+    depth = len(package_name.split("."))
+    import_root = package_root.resolve()
+    for _ in range(depth):
+        import_root = import_root.parent
     for path in sorted(package_root.rglob("*.py")):
         try:
             if "@cli(" not in path.read_text():
                 continue
         except OSError:
             continue
-        rel = path.relative_to(package_root.parent)
+        rel = path.resolve().relative_to(import_root)
         mod = ".".join(rel.with_suffix("").parts)
         if not mod.startswith(package_name + "."):
             continue
