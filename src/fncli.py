@@ -277,6 +277,18 @@ def run(argv: list[str] | None = None) -> None:
     sys.exit(code)
 
 
+def alias(src: str, dst: str) -> None:
+    """Point `dst` at the same handler as `src`.
+
+    Example: alias("space swarm tail", "space tail")
+    """
+    if src not in _REGISTRY:
+        raise KeyError(f"alias source {src!r} not registered")
+    _REGISTRY[dst] = _REGISTRY[src]
+    if src in _REQUIRED_LISTS:
+        _REQUIRED_LISTS[dst] = _REQUIRED_LISTS[src]
+
+
 def alias_namespace(src: str, dst: str) -> None:
     """Register all commands under `src` namespace also under `dst`.
 
