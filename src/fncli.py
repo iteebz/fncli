@@ -342,7 +342,11 @@ def dispatch(argv: list[str]) -> int:
 
 
 def run(argv: list[str] | None = None) -> None:
-    code = dispatch(argv if argv is not None else sys.argv[1:])
+    try:
+        code = dispatch(argv if argv is not None else sys.argv[1:])
+    except UsageError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
     sys.exit(code)
 
 

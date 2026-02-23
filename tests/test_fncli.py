@@ -250,6 +250,16 @@ def test_usage_error_returns_one(capsys):
     assert "bad input" in capsys.readouterr().err
 
 
+def test_usage_error_caught_by_run_before_dispatch(capsys, monkeypatch):
+    monkeypatch.setattr(
+        fncli, "dispatch", lambda _argv: (_ for _ in ()).throw(UsageError("pre-dispatch boom"))
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        fncli.run(["anything"])
+    assert exc_info.value.code == 1
+    assert "pre-dispatch boom" in capsys.readouterr().err
+
+
 # --- invalid args ---
 
 
