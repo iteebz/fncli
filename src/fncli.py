@@ -27,6 +27,8 @@ _REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
 _REQUIRED_LISTS: dict[str, list[str]] = {}
 _READONLY: dict[str, bool] = {}
 
+RESERVED: frozenset[str] = frozenset({"selftest"})
+
 
 class UsageError(Exception):
     pass
