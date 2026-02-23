@@ -3,6 +3,11 @@ default:
 
 install:
     @uv sync
+    @just hooks
+
+hooks:
+    @cp scripts/hooks/pre-commit .git/hooks/pre-commit
+    @chmod +x .git/hooks/pre-commit
 
 lint:
     #!/bin/bash
