@@ -25,7 +25,7 @@ from typing import Any
 
 _REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
 _REQUIRED_LISTS: dict[str, list[str]] = {}
-_READONLY: dict[str, bool] = {}
+_META: dict[str, dict[str, Any]] = {}
 
 RESERVED: frozenset[str] = frozenset({"selftest"})
 
@@ -55,6 +55,7 @@ def cli(
     aliases: list[str] | None = None,
     default: bool = False,
     readonly: bool = False,
+    meta: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         _name = name if name is not None else fn.__name__.replace("_", "-")
@@ -106,9 +107,13 @@ def cli(
             is list
             and param.default is inspect.Parameter.empty
         ]
-        _REGISTRY[key] = (fn, parser)
+        merged = dict(meta or {})
         if readonly:
-            _READONLY[key] = True
+            merged["readonly"] = True
+
+        _REGISTRY[key] = (fn, parser)
+        if merged:
+            _META[key] = merged
         if required_lists:
             _REQUIRED_LISTS[key] = required_lists
         else:
@@ -118,8 +123,8 @@ def cli(
         for alias in aliases or []:
             alias_key = f"{parent} {alias}".strip() if parent else alias
             _REGISTRY[alias_key] = (fn, parser)
-            if readonly:
-                _READONLY[alias_key] = True
+            if merged:
+                _META[alias_key] = merged
             if required_lists:
                 _REQUIRED_LISTS[alias_key] = required_lists
             else:
@@ -375,11 +380,23 @@ def commands() -> list[str]:
 
 
 def is_readonly(key: str) -> bool:
-    return _READONLY.get(key, False)
+    return _META.get(key, {}).get("readonly", False)
 
 
 def readonly_commands() -> list[str]:
-    return sorted(k for k in _REGISTRY if _READONLY.get(k, False))
+    return where(readonly=True)
+
+
+def meta(key: str) -> dict[str, Any]:
+    return _META.get(key, {})
+
+
+def where(**kwargs: Any) -> list[str]:
+    return sorted(
+        k
+        for k in _REGISTRY
+        if all(_META.get(k, {}).get(field) == value for field, value in kwargs.items())
+    )
 
 
 def entries() -> list[tuple[str, "Callable[..., Any]", "argparse.ArgumentParser"]]:

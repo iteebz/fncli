@@ -1,20 +1,27 @@
 import pytest
 
+import fncli
 from fncli import (
-    _REGISTRY,
     UsageError,
     cli,
     commands,
     dispatch,
+    is_readonly,
+    meta,
     try_dispatch,
+    where,
 )
 
 
 @pytest.fixture(autouse=True)
 def clean_registry():
-    _REGISTRY.clear()
+    fncli._REGISTRY.clear()
+    fncli._META.clear()
+    fncli._REQUIRED_LISTS.clear()
     yield
-    _REGISTRY.clear()
+    fncli._REGISTRY.clear()
+    fncli._META.clear()
+    fncli._REQUIRED_LISTS.clear()
 
 
 # --- registration ---
@@ -25,7 +32,7 @@ def test_registers_by_function_name():
     def status():
         pass
 
-    assert "status" in _REGISTRY
+    assert "status" in commands()
 
 
 def test_registers_with_parent():
@@ -33,7 +40,7 @@ def test_registers_with_parent():
     def start():
         pass
 
-    assert "app start" in _REGISTRY
+    assert "app start" in commands()
 
 
 def test_name_override():
@@ -41,8 +48,8 @@ def test_name_override():
     def status():
         pass
 
-    assert "st" in _REGISTRY
-    assert "status" not in _REGISTRY
+    assert "st" in commands()
+    assert "status" not in commands()
 
 
 def test_underscore_to_hyphen():
@@ -50,7 +57,7 @@ def test_underscore_to_hyphen():
     def list_all():
         pass
 
-    assert "list-all" in _REGISTRY
+    assert "list-all" in commands()
 
 
 # --- argument parsing ---
@@ -341,3 +348,69 @@ def test_selftest_live_flag_runs_readonly(capsys):
     result = try_dispatch(["myapp", "selftest", "--live"])
     assert result == 0
     assert ran == [True]
+
+
+# --- meta ---
+
+
+def test_meta_stored():
+    @cli(meta={"audience": "us"})
+    def backup():
+        pass
+
+    assert meta("backup") == {"audience": "us"}
+
+
+def test_meta_default_empty():
+    @cli()
+    def status():
+        pass
+
+    assert meta("status") == {}
+
+
+def test_where():
+    @cli("app", meta={"audience": "us"})
+    def backup():
+        pass
+
+    @cli("app", meta={"audience": "them"})
+    def status():
+        pass
+
+    @cli("app", meta={"audience": "us"})
+    def db():
+        pass
+
+    assert where(audience="us") == ["app backup", "app db"]
+    assert where(audience="them") == ["app status"]
+    assert where(audience="nope") == []
+
+
+def test_meta_on_alias():
+    @cli("app", aliases=["bk"], meta={"audience": "us"})
+    def backup():
+        pass
+
+    assert meta("app bk") == {"audience": "us"}
+    assert where(audience="us") == ["app backup", "app bk"]
+
+
+def test_readonly_is_meta_sugar():
+    @cli("app", readonly=True)
+    def status():
+        pass
+
+    assert meta("app status") == {"readonly": True}
+    assert is_readonly("app status") is True
+    assert where(readonly=True) == ["app status"]
+
+
+def test_readonly_merges_with_meta():
+    @cli("app", readonly=True, meta={"audience": "them"})
+    def status():
+        pass
+
+    assert meta("app status") == {"audience": "them", "readonly": True}
+    assert is_readonly("app status") is True
+    assert where(audience="them", readonly=True) == ["app status"]
