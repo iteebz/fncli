@@ -16,10 +16,12 @@ from fncli import (
 @pytest.fixture(autouse=True)
 def clean_registry():
     fncli._REGISTRY.clear()
+    fncli._DEFAULTS.clear()
     fncli._META.clear()
     fncli._REQUIRED_LISTS.clear()
     yield
     fncli._REGISTRY.clear()
+    fncli._DEFAULTS.clear()
     fncli._META.clear()
     fncli._REQUIRED_LISTS.clear()
 
@@ -295,6 +297,75 @@ def test_help_unknown_prefix_returns_error():
     assert result == 1
 
 
+def test_default_command_help_shows_namespace(capsys):
+    @cli("app", default=True)
+    def ls():
+        """list items"""
+
+    @cli("app")
+    def add(name: str):
+        """add an item"""
+
+    @cli("app")
+    def rm(name: str):
+        """remove an item"""
+
+    result = try_dispatch(["app", "--help"])
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "ls" in out
+    assert "add" in out
+    assert "rm" in out
+
+
+def test_default_command_dispatches_without_args(capsys):
+    captured: list[str] = []
+
+    @cli("app", default=True)
+    def ls():
+        """list items"""
+        captured.append("ls")
+
+    @cli("app")
+    def add(name: str):
+        """add an item"""
+
+    result = dispatch(["app"])
+    assert result == 0
+    assert captured == ["ls"]
+
+
+def test_default_command_passes_args(capsys):
+    captured: list[bool] = []
+
+    @cli("app", default=True)
+    def ls(verbose: bool = False):
+        """list items"""
+        captured.append(verbose)
+
+    @cli("app")
+    def add(name: str):
+        """add an item"""
+
+    assert dispatch(["app", "--verbose"]) == 0
+    assert captured == [True]
+
+
+def test_trailing_underscore_flag(capsys):
+    captured: list[str] = []
+
+    @cli()
+    def query(type_: str = "all"):
+        captured.append(type_)
+
+    assert dispatch(["query", "--type", "foo"]) == 0
+    assert captured == ["foo"]
+    assert try_dispatch(["query", "--help"]) == 0
+    out = capsys.readouterr().out
+    assert "--type TYPE" in out
+    assert "TYPE_" not in out
+
+
 # --- commands() ---
 
 
@@ -404,6 +475,26 @@ def test_meta_on_alias():
 
     assert meta("app bk") == {"audience": "us"}
     assert where(audience="us") == ["app backup", "app bk"]
+
+
+def test_alias_copies_meta():
+    @cli("app", readonly=True, meta={"audience": "us"})
+    def backup():
+        pass
+
+    fncli.alias("app backup", "app bk")
+    assert meta("app bk") == {"audience": "us", "readonly": True}
+    assert is_readonly("app bk") is True
+
+
+def test_alias_namespace_copies_meta():
+    @cli("app log", readonly=True, meta={"audience": "us"})
+    def entry():
+        pass
+
+    fncli.alias_namespace("app log", "app add")
+    assert meta("app add entry") == {"audience": "us", "readonly": True}
+    assert is_readonly("app add entry") is True
 
 
 def test_readonly_is_meta_sugar():

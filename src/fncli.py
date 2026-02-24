@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 _REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
+_DEFAULTS: dict[str, str] = {}
 _REQUIRED_LISTS: dict[str, list[str]] = {}
 _META: dict[str, dict[str, Any]] = {}
 
@@ -73,15 +74,26 @@ def cli(
             is_list = typing.get_origin(raw) is list
             inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str
             explicit_flags = _flags.get(pname)
-            flag_names = explicit_flags or [f"--{pname.replace('_', '-')}"]
+            clean = pname.rstrip("_")
+            flag_names = explicit_flags or [f"--{clean.replace('_', '-')}"]
             no_default = param.default is inspect.Parameter.empty
             positional_optional = explicit_flags == [] and not no_default
+            metavar = clean.upper() if clean != pname else None
 
             if is_list:
                 if no_default:
                     parser.add_argument(pname, type=inner, nargs="+")
                 elif positional_optional:
                     parser.add_argument(pname, type=inner, nargs="*", default=param.default)
+                elif metavar:
+                    parser.add_argument(
+                        *flag_names,
+                        dest=pname,
+                        type=inner,
+                        nargs="*",
+                        default=param.default,
+                        metavar=metavar,
+                    )
                 else:
                     parser.add_argument(
                         *flag_names, dest=pname, type=inner, nargs="*", default=param.default
@@ -92,6 +104,15 @@ def cli(
                 parser.add_argument(pname, type=raw, nargs="?", default=param.default)
             elif no_default:
                 parser.add_argument(pname, type=raw)
+            elif metavar:
+                parser.add_argument(
+                    *flag_names,
+                    dest=pname,
+                    type=raw,
+                    default=param.default,
+                    required=False,
+                    metavar=metavar,
+                )
             else:
                 parser.add_argument(
                     *flag_names, dest=pname, type=raw, default=param.default, required=False
@@ -120,7 +141,7 @@ def cli(
         else:
             _REQUIRED_LISTS.pop(key, None)
         if default and parent:
-            _REGISTRY[parent] = (fn, parser)
+            _DEFAULTS[parent] = key
         for alias in aliases or []:
             alias_key = f"{parent} {alias}".strip() if parent else alias
             _REGISTRY[alias_key] = (fn, parser)
@@ -245,6 +266,24 @@ def _subcommand_matches(prefix: str, token: str) -> bool:
     return any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
 
 
+def _show_namespace(prefix: str, argv: list[str]) -> int:
+    has_help = bool(_HELP_FLAGS & set(argv))
+    matches = sorted(
+        (key, parser.description or "")
+        for key, (_, parser) in _REGISTRY.items()
+        if key.startswith(prefix + " ") and key != prefix
+    )
+    if matches:
+        lines = _collapse_commands(prefix, matches)
+        col = max((len(cmd) for cmd, _ in lines), default=0)
+        sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
+        for cmd, desc in lines:
+            sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
+        sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
+        return 0 if has_help else 1
+    return -1
+
+
 def try_dispatch(argv: list[str]) -> int | None:
     if len(argv) >= 2 and argv[1] == "selftest":
         return _selftest(argv[0], live="--live" in argv[2:])
@@ -259,6 +298,19 @@ def try_dispatch(argv: list[str]) -> int | None:
             ):
                 continue
             return _dispatch_one(key, remaining)
+        if key in _DEFAULTS:
+            remaining = argv[depth:]
+            if (
+                remaining
+                and not remaining[0].startswith("-")
+                and _subcommand_matches(key, remaining[0])
+            ):
+                continue
+            if remaining and bool(_HELP_FLAGS & set(remaining)):
+                result = _show_namespace(key, argv)
+                if result >= 0:
+                    return result
+            return _dispatch_one(_DEFAULTS[key], remaining)
 
     has_help = bool(_HELP_FLAGS & set(argv))
     non_help = [a for a in argv if a not in _HELP_FLAGS]
@@ -361,6 +413,8 @@ def alias(src: str, dst: str) -> None:
     _REGISTRY[dst] = _REGISTRY[src]
     if src in _REQUIRED_LISTS:
         _REQUIRED_LISTS[dst] = _REQUIRED_LISTS[src]
+    if src in _META:
+        _META[dst] = _META[src]
 
 
 def alias_namespace(src: str, dst: str) -> None:
@@ -378,6 +432,8 @@ def alias_namespace(src: str, dst: str) -> None:
         orig_key = src + alias_key[len(dst) :]
         if orig_key in _REQUIRED_LISTS:
             _REQUIRED_LISTS[alias_key] = _REQUIRED_LISTS[orig_key]
+        if orig_key in _META:
+            _META[alias_key] = _META[orig_key]
 
 
 def commands() -> list[str]:
