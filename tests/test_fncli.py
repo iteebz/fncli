@@ -1,8 +1,11 @@
+import sys
+
 import pytest
 
 import fncli
 from fncli import (
     UsageError,
+    bare,
     cli,
     commands,
     dispatch,
@@ -19,11 +22,13 @@ def clean_registry():
     fncli._DEFAULTS.clear()
     fncli._META.clear()
     fncli._REQUIRED_LISTS.clear()
+    fncli._BARE.clear()
     yield
     fncli._REGISTRY.clear()
     fncli._DEFAULTS.clear()
     fncli._META.clear()
     fncli._REQUIRED_LISTS.clear()
+    fncli._BARE.clear()
 
 
 # --- registration ---
@@ -515,3 +520,114 @@ def test_readonly_merges_with_meta():
     assert meta("app status") == {"audience": "them", "readonly": True}
     assert is_readonly("app status") is True
     assert where(audience="them", readonly=True) == ["app status"]
+
+
+# --- bare ---
+
+
+def test_bare_runs_on_empty_args(capsys):
+    @cli("myapp")
+    def start():
+        """start it"""
+
+    called: list[bool] = []
+
+    def dashboard():
+        called.append(True)
+        sys.stdout.write("dashboard output\n")
+
+    bare("myapp", dashboard)
+    result = try_dispatch(["myapp"])
+    assert result == 0
+    assert called == [True]
+    assert "dashboard" in capsys.readouterr().out
+
+
+def test_bare_skipped_on_help(capsys):
+    @cli("myapp")
+    def start():
+        """start it"""
+
+    bare("myapp", lambda: sys.stdout.write("nope\n"))
+    result = try_dispatch(["myapp", "--help"])
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "nope" not in out
+    assert "start" in out
+
+
+def test_bare_return_code():
+    @cli("myapp")
+    def start():
+        """start it"""
+
+    bare("myapp", lambda: 1)
+    assert try_dispatch(["myapp"]) == 1
+
+
+def test_bare_usage_error(capsys):
+    @cli("myapp")
+    def start():
+        """start it"""
+
+    def bad():
+        raise UsageError("nope")
+
+    bare("myapp", bad)
+    assert try_dispatch(["myapp"]) == 1
+    assert "nope" in capsys.readouterr().err
+
+
+def test_bare_via_dispatch(capsys):
+    @cli("myapp")
+    def start():
+        """start it"""
+
+    called: list[bool] = []
+
+    def dashboard():
+        called.append(True)
+
+    bare("myapp", dashboard)
+    result = dispatch(["myapp"])
+    assert result == 0
+    assert called == [True]
+
+
+def test_bare_does_not_block_subcommands(capsys):
+    order: list[str] = []
+
+    @cli("myapp")
+    def start():
+        """start it"""
+        order.append("start")
+
+    bare("myapp", lambda: order.append("bare"))
+    assert try_dispatch(["myapp", "start"]) == 0
+    assert order == ["start"]
+
+
+# --- help= per-param descriptions ---
+
+
+def test_help_dict_appears_in_argparse(capsys):
+    @cli(help={"name": "who to greet", "loud": "shout it"})
+    def greet(name: str, loud: bool = False):
+        """say hello"""
+
+    result = try_dispatch(["greet", "--help"])
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "who to greet" in out
+    assert "shout it" in out
+
+
+def test_help_dict_partial(capsys):
+    @cli(help={"name": "who to greet"})
+    def greet2(name: str, loud: bool = False):
+        """say hello"""
+
+    result = try_dispatch(["greet2", "--help"])
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "who to greet" in out

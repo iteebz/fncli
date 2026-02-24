@@ -28,6 +28,7 @@ _REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
 _DEFAULTS: dict[str, str] = {}
 _REQUIRED_LISTS: dict[str, list[str]] = {}
 _META: dict[str, dict[str, Any]] = {}
+_BARE: dict[str, Callable[..., Any]] = {}
 
 RESERVED: frozenset[str] = frozenset({"selftest"})
 
@@ -48,12 +49,17 @@ def _unwrap_optional(ann: Any) -> Any:
     return ann if callable(ann) else str
 
 
+def bare(namespace: str, fn: Callable[..., Any]) -> None:
+    _BARE[namespace] = fn
+
+
 def cli(
     parent: str | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
     flags: dict[str, list[str]] | None = None,
+    help: dict[str, str] | None = None,
     aliases: list[str] | None = None,
     default: bool = False,
     readonly: bool = False,
@@ -64,6 +70,7 @@ def cli(
         key = f"{parent} {_name}".strip() if parent else _name
         desc = description or fn.__doc__ or ""
         _flags = flags or {}
+        _help = help or {}
 
         parser = argparse.ArgumentParser(prog=key, description=desc, add_help=True)
         sig = inspect.signature(fn)
@@ -80,11 +87,15 @@ def cli(
             positional_optional = explicit_flags == [] and not no_default
             metavar = clean.upper() if clean != pname else None
 
+            param_help = _help.get(pname)
+
             if is_list:
                 if no_default:
-                    parser.add_argument(pname, type=inner, nargs="+")
+                    parser.add_argument(pname, type=inner, nargs="+", help=param_help)
                 elif positional_optional:
-                    parser.add_argument(pname, type=inner, nargs="*", default=param.default)
+                    parser.add_argument(
+                        pname, type=inner, nargs="*", default=param.default, help=param_help
+                    )
                 elif metavar:
                     parser.add_argument(
                         *flag_names,
@@ -93,17 +104,27 @@ def cli(
                         nargs="*",
                         default=param.default,
                         metavar=metavar,
+                        help=param_help,
                     )
                 else:
                     parser.add_argument(
-                        *flag_names, dest=pname, type=inner, nargs="*", default=param.default
+                        *flag_names,
+                        dest=pname,
+                        type=inner,
+                        nargs="*",
+                        default=param.default,
+                        help=param_help,
                     )
             elif raw is bool:
-                parser.add_argument(*flag_names, dest=pname, action="store_true", default=False)
+                parser.add_argument(
+                    *flag_names, dest=pname, action="store_true", default=False, help=param_help
+                )
             elif positional_optional:
-                parser.add_argument(pname, type=raw, nargs="?", default=param.default)
+                parser.add_argument(
+                    pname, type=raw, nargs="?", default=param.default, help=param_help
+                )
             elif no_default:
-                parser.add_argument(pname, type=raw)
+                parser.add_argument(pname, type=raw, help=param_help)
             elif metavar:
                 parser.add_argument(
                     *flag_names,
@@ -112,10 +133,16 @@ def cli(
                     default=param.default,
                     required=False,
                     metavar=metavar,
+                    help=param_help,
                 )
             else:
                 parser.add_argument(
-                    *flag_names, dest=pname, type=raw, default=param.default, required=False
+                    *flag_names,
+                    dest=pname,
+                    type=raw,
+                    default=param.default,
+                    required=False,
+                    help=param_help,
                 )
 
         required_lists = [
@@ -315,6 +342,15 @@ def try_dispatch(argv: list[str]) -> int | None:
     has_help = bool(_HELP_FLAGS & set(argv))
     non_help = [a for a in argv if a not in _HELP_FLAGS]
     prefix = " ".join(non_help)
+
+    if prefix in _BARE and not has_help:
+        try:
+            result = _BARE[prefix]()
+            return result if isinstance(result, int) else 0
+        except UsageError as e:
+            sys.stderr.write(f"{e}\n")
+            return 1
+
     if len(non_help) <= 1 and not has_help:
         return None
 
