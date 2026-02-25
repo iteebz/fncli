@@ -236,7 +236,7 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
-def _selftest(prog: str, live: bool = False) -> int:
+def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
     prefix = prog + " "
     results: list[dict[str, str]] = []
 
@@ -273,19 +273,32 @@ def _selftest(prog: str, live: bool = False) -> int:
         sys.stderr.write(f"{prog} selftest: no commands registered\n")
         return 1
 
-    col = max(len(r["command"]) for r in results)
-    for r in results:
-        h = "✓" if r["help"] == "pass" else ("·" if r["help"] == "skip" else "✗")
-        lv = "✓" if r["live"] == "pass" else ("·" if r["live"] == "skip" else "✗")
-        line = f"  {r['command']:<{col}}  help={h}  live={lv}"
-        if "FAIL" in r.get("live", ""):
-            line += f"  ({r['live']})"
-        sys.stdout.write(line + "\n")
-
     failed = sum(1 for r in results if "FAIL" in r["help"] or "FAIL" in r.get("live", ""))
     total = len(results)
+
+    if not quiet:
+        col = max(len(r["command"]) for r in results)
+        for r in results:
+            h = "✓" if r["help"] == "pass" else ("·" if r["help"] == "skip" else "✗")
+            lv = "✓" if r["live"] == "pass" else ("·" if r["live"] == "skip" else "✗")
+            line = f"  {r['command']:<{col}}  help={h}  live={lv}"
+            if "FAIL" in r.get("live", ""):
+                line += f"  ({r['live']})"
+            sys.stdout.write(line + "\n")
+        sys.stdout.write("\n")
+
+    if failed:
+        col = max(len(r["command"]) for r in results)
+        for r in results:
+            if "FAIL" in r["help"] or "FAIL" in r.get("live", ""):
+                h = "✗" if "FAIL" in r["help"] else "✓"
+                lv = r.get("live", "skip")
+                sys.stdout.write(f"  FAIL  {r['command']:<{col}}  help={h}  live={lv}\n")
+
     sys.stdout.write(
-        f"\n{total - failed}/{total} passed" + (f"  ({failed} failed)" if failed else "") + "\n"
+        f"  {prog}: {total - failed}/{total} passed"
+        + (f"  ({failed} failed)" if failed else "")
+        + "\n"
     )
     return 1 if failed else 0
 
@@ -315,7 +328,7 @@ def _show_namespace(prefix: str, argv: list[str]) -> int:
 
 def try_dispatch(argv: list[str]) -> int | None:
     if len(argv) >= 2 and argv[1] == "selftest":
-        return _selftest(argv[0], live="--live" in argv[2:])
+        return _selftest(argv[0], live="--live" in argv[2:], quiet="--quiet" in argv[2:])
     for depth in range(len(argv), 0, -1):
         key = " ".join(argv[:depth])
         if key in _REGISTRY:
