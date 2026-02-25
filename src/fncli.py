@@ -60,6 +60,7 @@ def cli(
     description: str | None = None,
     flags: dict[str, list[str]] | None = None,
     help: dict[str, str] | None = None,
+    required: list[str] | None = None,
     aliases: list[str] | None = None,
     default: bool = False,
     readonly: bool = False,
@@ -71,6 +72,7 @@ def cli(
         desc = description or fn.__doc__ or ""
         _flags = flags or {}
         _help = help or {}
+        _required = set(required or [])
 
         parser = argparse.ArgumentParser(prog=key, description=desc, add_help=True)
         sig = inspect.signature(fn)
@@ -131,7 +133,7 @@ def cli(
                     dest=pname,
                     type=raw,
                     default=param.default,
-                    required=False,
+                    required=pname in _required,
                     metavar=metavar,
                     help=param_help,
                 )
@@ -141,7 +143,7 @@ def cli(
                     dest=pname,
                     type=raw,
                     default=param.default,
-                    required=False,
+                    required=pname in _required,
                     help=param_help,
                 )
 

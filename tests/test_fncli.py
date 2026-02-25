@@ -622,6 +622,52 @@ def test_help_dict_appears_in_argparse(capsys):
     assert "shout it" in out
 
 
+# --- required= kwarg ---
+
+
+def test_required_kwarg_rejects_missing(capsys):
+    @cli(required=["why"])
+    def propose(content: str, why: str | None = None):
+        pass
+
+    assert dispatch(["propose", "hello"]) != 0
+    err = capsys.readouterr().err
+    assert "--why" in err
+
+
+def test_required_kwarg_accepts_when_provided():
+    captured: list[str] = []
+
+    @cli(required=["why"])
+    def propose(content: str, why: str | None = None):
+        captured.append(why)
+
+    assert dispatch(["propose", "hello", "--why", "because"]) == 0
+    assert captured == ["because"]
+
+
+def test_required_kwarg_shows_in_help(capsys):
+    @cli(required=["why"])
+    def propose(content: str, why: str | None = None):
+        """make a proposal"""
+
+    try_dispatch(["propose", "--help"])
+    out = capsys.readouterr().out
+    assert "required" in out.lower() or "--why WHY" in out
+
+
+def test_required_kwarg_with_metavar(capsys):
+    captured: list[str] = []
+
+    @cli(required=["type_"])
+    def query(type_: str | None = None):
+        captured.append(type_)
+
+    assert dispatch(["query"]) != 0
+    assert dispatch(["query", "--type", "foo"]) == 0
+    assert captured == ["foo"]
+
+
 def test_help_dict_partial(capsys):
     @cli(help={"name": "who to greet"})
     def greet2(name: str, loud: bool = False):
