@@ -51,6 +51,7 @@ pip install fncli
 
 Underscores in param names → hyphenated flags: `dry_run` → `--dry-run`.
 Underscores in function names → hyphenated commands: `list_all` → `list-all`.
+Trailing `_` stripped — avoids reserved words: `json_: bool = False` → `--json`.
 
 ## Subcommands
 
