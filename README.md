@@ -3,14 +3,23 @@
 Turn any function into a CLI. One decorator. Zero ceremony.
 
 ```python
-from fncli import cli, run
+# myapp/commands.py
+from fncli import cli
 
 @cli("myapp")
 def deploy(target: str, force: bool = False):
     """ship it"""
     print(f"deploying to {target}")
+```
 
-run()
+```python
+# myapp/__main__.py
+import sys
+import fncli
+from myapp import commands as _commands; _ = _commands
+
+def main():
+    fncli.run(["myapp", *sys.argv[1:]])
 ```
 
 ```
@@ -19,6 +28,8 @@ deploying to prod
 ```
 
 Signature → argparse. Docstring → help. Types → validation. One file, no dependencies.
+
+**File structure and command tree are independent.** `@cli` can go anywhere — one file can register commands under multiple namespaces. Where you put the code is an implementation detail; the CLI shape is declared by the decorator.
 
 ## Install
 
@@ -38,7 +49,7 @@ pip install fncli
 | `tags: list[str] = []` | `--tags a b c` optional flag (`nargs="*"`) |
 | `filter: str \| None = None` | `--filter` optional flag |
 
-Underscores in param names → hyphenated flags: `dry_run` → `--dry-run`.  
+Underscores in param names → hyphenated flags: `dry_run` → `--dry-run`.
 Underscores in function names → hyphenated commands: `list_all` → `list-all`.
 
 ## Subcommands
@@ -59,7 +70,7 @@ def start(port: int = 8080): ...      # → "myapp server start"
 def stop(force: bool = False): ...    # → "myapp server stop"
 ```
 
-Dispatch is longest-match: `myapp server start` wins over `myapp server`.  
+Dispatch is longest-match: `myapp server start` wins over `myapp server`.
 `myapp server --help` auto-lists all subcommands under that namespace.
 
 ## `@cli()` options
@@ -69,10 +80,13 @@ Dispatch is longest-match: `myapp server start` wins over `myapp server`.
     "myapp",               # parent namespace (str or None)
     name="st",             # override command name (default: fn.__name__, underscores → hyphens)
     description="...",     # override help text (default: fn.__doc__)
+    flags={...},           # see Flags
+    help={...},            # per-param help strings: {"param": "description"}
+    required=["param"],    # force a flag to be required even if it has a default
     aliases=["s"],         # additional keys that dispatch to this handler
     default=True,          # run this when parent is invoked bare: `myapp` → runs this fn
     readonly=True,         # tag command; query with is_readonly() / readonly_commands()
-    flags={...},           # see Flags
+    meta={...},            # arbitrary metadata; query with meta(key) / where(**kwargs)
 )
 ```
 
@@ -117,6 +131,17 @@ def start(port: int = 8080): ...
 # `myapp server start` also works
 ```
 
+## Bare callback
+
+Run arbitrary code when a namespace is invoked with no subcommand or flags:
+
+```python
+fncli.bare("myapp", lambda: print("welcome"))
+# `myapp` → prints welcome
+# `myapp --help` → shows subcommand list (bare is skipped)
+# `myapp start` → dispatches start (bare is skipped)
+```
+
 ## Error handling
 
 `UsageError` prints a clean message to stderr and exits 1, no traceback:
@@ -132,22 +157,39 @@ def deploy(env: str):
 
 Return an int to set the exit code explicitly. `None` / no return → exit 0.
 
+## Entrypoint
+
+`dispatch` and `try_dispatch` expect `argv[0]` to be the program name, matching the namespace used in `@cli()`:
+
+```python
+def main():
+    fncli.run(["myapp", *sys.argv[1:]])
+```
+
+Or with autodiscovery:
+
+```python
+def main():
+    fncli.autodiscover(Path(__file__).parent, "myapp")
+    fncli.run(["myapp", *sys.argv[1:]])
+```
+
 ## Autodiscovery
+
+Scans the package for any `.py` file containing `@cli(` and imports it. No routing table, no manual imports.
 
 ```python
 from pathlib import Path
 import fncli
 
 fncli.autodiscover(Path(__file__).parent, "myapp")
-fncli.run()
+fncli.run(["myapp", *sys.argv[1:]])
 ```
-
-Scans the package for any `.py` file containing `@cli(` and imports it. No routing table, no manual imports.
 
 ## Dispatch
 
 ```python
-fncli.run(argv=None)      # dispatch sys.argv[1:], then sys.exit(code)
+fncli.run(argv)           # dispatch argv, then sys.exit(code). argv[0] = program name.
 fncli.dispatch(argv)      # dispatch; prints help + returns 1 if nothing matched
 fncli.try_dispatch(argv)  # dispatch; returns None if nothing matched (use when sharing argv)
 ```
@@ -163,8 +205,9 @@ Unknown command: strat. Did you mean: start, status?
 Every CLI gets a hidden `selftest` command for free:
 
 ```
-$ myapp selftest          # smoke-test --help on all commands
-$ myapp selftest --live   # also run readonly no-arg commands
+$ myapp selftest           # smoke-test --help on all commands
+$ myapp selftest --live    # also run readonly no-arg commands
+$ myapp selftest --quiet   # summary only; failures still surfaced
 ```
 
 Hidden from `--help`. Useful in CI: `uv run myapp selftest`.
@@ -174,16 +217,20 @@ Hidden from `--help`. Useful in CI: `uv run myapp selftest`.
 ```python
 fncli.commands()           # sorted list of all registered keys
 fncli.entries()            # [(key, fn, parser), ...] for all registered commands
+fncli.manifest()           # flat dict of all commands with params, types, defaults, meta
 fncli.is_readonly(key)     # True if registered with readonly=True
 fncli.readonly_commands()  # sorted list of readonly keys
+fncli.meta(key)            # dict of metadata for key
+fncli.where(**kwargs)      # sorted list of keys matching metadata predicates
 ```
 
 ## API reference
 
 | symbol | signature | description |
 |---|---|---|
-| `cli` | `(parent?, *, name, description, flags, aliases, default, readonly)` | decorator — register fn as command |
-| `run` | `(argv?)` | dispatch + sys.exit; defaults to sys.argv[1:] |
+| `cli` | `(parent?, *, name, description, flags, help, required, aliases, default, readonly, meta)` | decorator — register fn as command |
+| `bare` | `(namespace, fn)` | register a callback for bare namespace invocation |
+| `run` | `(argv)` | dispatch + sys.exit; argv[0] = program name |
 | `dispatch` | `(argv)` | dispatch; prints help and returns 1 on miss |
 | `try_dispatch` | `(argv)` | dispatch; returns None on miss |
 | `alias` | `(src, dst)` | point key `dst` at the same handler as `src` |
@@ -191,6 +238,10 @@ fncli.readonly_commands()  # sorted list of readonly keys
 | `autodiscover` | `(root: Path, pkg: str)` | scan package, import files containing `@cli(` |
 | `commands` | `()` | sorted list of registered keys |
 | `entries` | `()` | `[(key, fn, parser), ...]` |
+| `manifest` | `()` | flat dict — all commands with description, params, meta; for agent consumption |
+| `meta` | `(key)` | metadata dict for key |
+| `where` | `(**kwargs)` | sorted list of keys matching metadata predicates |
 | `is_readonly` | `(key)` | bool — was key registered with `readonly=True` |
 | `readonly_commands` | `()` | sorted list of readonly keys |
 | `UsageError` | | raise inside a command for clean stderr + exit 1 |
+| `RESERVED` | | frozenset of names downstream CLIs should not register (`{"selftest"}`) |
