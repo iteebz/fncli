@@ -10,9 +10,6 @@
   "reportConstantRedefinition": true,
   "reportUnknownMemberType": false,
   "reportUnknownArgumentType": false,
-  "reportMissingParameterType": false,
-  "reportPrivateUsage": false,
   "reportUnknownVariableType": false,
-  "reportUnknownParameterType": false,
-  "reportUnknownLambdaType": false
+  "reportUnknownParameterType": false
 }
