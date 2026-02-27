@@ -209,7 +209,12 @@ def cli(
 def _dispatch_one(key: str, argv: list[str]) -> int:
     fn, parser = _REGISTRY[key]
     required_lists = _REQUIRED_LISTS.get(key, [])
-    if required_lists and not any(a for a in argv if not a.startswith("-")):
+    if (
+        required_lists
+        and not any(a for a in argv if not a.startswith("-"))
+        and "--help" not in argv
+        and "-h" not in argv
+    ):
         names = ", ".join(f"<{n}>" for n in required_lists)
         sys.stderr.write(f"{key}: {names} required. Run `{key} --help` for usage.\n")
         return 1
