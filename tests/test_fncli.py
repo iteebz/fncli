@@ -20,14 +20,10 @@ from fncli import (
 def clean_registry():
     fncli._REGISTRY.clear()
     fncli._DEFAULTS.clear()
-    fncli._META.clear()
-    fncli._REQUIRED_LISTS.clear()
     fncli._BARE.clear()
     yield
     fncli._REGISTRY.clear()
     fncli._DEFAULTS.clear()
-    fncli._META.clear()
-    fncli._REQUIRED_LISTS.clear()
     fncli._BARE.clear()
 
 
@@ -666,6 +662,40 @@ def test_required_kwarg_with_metavar(capsys):
     assert dispatch(["query"]) != 0
     assert dispatch(["query", "--type", "foo"]) == 0
     assert captured == ["foo"]
+
+
+# --- manifest ---
+
+
+def test_manifest_structure():
+    @cli("myapp", readonly=True)
+    def deploy(target: str, force: bool = False):
+        """ship it"""
+
+    @cli("myapp", help={"query": "search string"})
+    def search(query: str, limit: int = 10):
+        """search items"""
+
+    m = fncli.manifest()
+    assert "myapp deploy" in m
+    assert "myapp search" in m
+
+    deploy_entry = m["myapp deploy"]
+    assert deploy_entry["description"] == "ship it"
+    assert deploy_entry["meta"] == {"readonly": True}
+
+    params = {p["name"]: p for p in deploy_entry["params"]}
+    assert params["target"]["type"] == "positional"
+    assert params["target"]["required"] is True
+    assert params["force"]["type"] == "flag"
+    assert params["force"]["default"] is False
+
+    search_entry = m["myapp search"]
+    search_params = {p["name"]: p for p in search_entry["params"]}
+    assert search_params["query"]["help"] == "search string"
+    assert search_params["limit"]["default"] == 10
+    assert search_params["limit"]["type"] == "option"
+    assert "--limit" in search_params["limit"]["flags"]
 
 
 def test_help_dict_partial(capsys):

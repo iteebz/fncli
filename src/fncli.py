@@ -24,13 +24,15 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
-_REGISTRY: dict[str, tuple[Callable[..., Any], argparse.ArgumentParser]] = {}
+# _REGISTRY: command key → {fn, parser, meta}
+# _DEFAULTS: namespace → default command key
+# _BARE:     namespace → bare callback
+_REGISTRY: dict[str, dict[str, Any]] = {}
 _DEFAULTS: dict[str, str] = {}
-_REQUIRED_LISTS: dict[str, list[str]] = {}
-_META: dict[str, dict[str, Any]] = {}
 _BARE: dict[str, Callable[..., Any]] = {}
 
-RESERVED: frozenset[str] = frozenset({"selftest"})
+RESERVED: frozenset[str] = frozenset({"selftest"})  # names downstream CLIs should not register
+_HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
 class UsageError(Exception):
@@ -47,6 +49,21 @@ def _unwrap_optional(ann: Any) -> Any:
         args = [a for a in typing.get_args(ann) if a is not type(None)]
         return args[0] if args else str
     return ann if callable(ann) else str
+
+
+def _required_positionals(fn: Callable[..., Any]) -> list[str]:
+    """Return names of required list-type positional params — used for early error messaging."""
+    return [
+        pname
+        for pname, param in inspect.signature(fn).parameters.items()
+        if typing.get_origin(
+            _unwrap_optional(
+                param.annotation if param.annotation is not inspect.Parameter.empty else str
+            )
+        )
+        is list
+        and param.default is inspect.Parameter.empty
+    ]
 
 
 def bare(namespace: str, fn: Callable[..., Any]) -> None:
@@ -147,39 +164,22 @@ def cli(
                     help=param_help,
                 )
 
-        required_lists = [
-            pname
-            for pname, param in sig.parameters.items()
-            if typing.get_origin(
-                _unwrap_optional(
-                    param.annotation if param.annotation is not inspect.Parameter.empty else str
-                )
-            )
-            is list
-            and param.default is inspect.Parameter.empty
-        ]
         merged = dict(meta or {})
         if readonly:
             merged["readonly"] = True
 
-        _REGISTRY[key] = (fn, parser)
-        if merged:
-            _META[key] = merged
-        if required_lists:
-            _REQUIRED_LISTS[key] = required_lists
-        else:
-            _REQUIRED_LISTS.pop(key, None)
-        if default and parent:
-            _DEFAULTS[parent] = key
+        entry: dict[str, Any] = {
+            "fn": fn,
+            "parser": parser,
+            "meta": merged,
+            "required_positionals": _required_positionals(fn),
+        }
+        _REGISTRY[key] = entry
         for alias in aliases or []:
             alias_key = f"{parent} {alias}".strip() if parent else alias
-            _REGISTRY[alias_key] = (fn, parser)
-            if merged:
-                _META[alias_key] = merged
-            if required_lists:
-                _REQUIRED_LISTS[alias_key] = required_lists
-            else:
-                _REQUIRED_LISTS.pop(alias_key, None)
+            _REGISTRY[alias_key] = entry
+        if default and parent:
+            _DEFAULTS[parent] = key
 
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if args or kwargs:
@@ -207,15 +207,16 @@ def cli(
 
 
 def _dispatch_one(key: str, argv: list[str]) -> int:
-    fn, parser = _REGISTRY[key]
-    required_lists = _REQUIRED_LISTS.get(key, [])
+    entry = _REGISTRY[key]
+    fn, parser = entry["fn"], entry["parser"]
+    req = entry["required_positionals"]
     if (
-        required_lists
+        req
         and not any(a for a in argv if not a.startswith("-"))
         and "--help" not in argv
         and "-h" not in argv
     ):
-        names = ", ".join(f"<{n}>" for n in required_lists)
+        names = ", ".join(f"<{n}>" for n in req)
         sys.stderr.write(f"{key}: {names} required. Run `{key} --help` for usage.\n")
         return 1
     stderr_buf = io.StringIO()
@@ -236,9 +237,6 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
     except UsageError as e:
         sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
         return 1
-
-
-_HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
 def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
@@ -280,9 +278,9 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
 
     failed = sum(1 for r in results if "FAIL" in r["help"] or "FAIL" in r.get("live", ""))
     total = len(results)
+    col = max(len(r["command"]) for r in results)
 
     if not quiet:
-        col = max(len(r["command"]) for r in results)
         for r in results:
             h = "✓" if r["help"] == "pass" else ("·" if r["help"] == "skip" else "✗")
             lv = "✓" if r["live"] == "pass" else ("·" if r["live"] == "skip" else "✗")
@@ -293,7 +291,6 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
         sys.stdout.write("\n")
 
     if failed:
-        col = max(len(r["command"]) for r in results)
         for r in results:
             if "FAIL" in r["help"] or "FAIL" in r.get("live", ""):
                 h = "✗" if "FAIL" in r["help"] else "✓"
@@ -313,11 +310,11 @@ def _subcommand_matches(prefix: str, token: str) -> bool:
     return any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
 
 
-def _show_namespace(prefix: str, argv: list[str]) -> int:
+def _show_namespace(prefix: str, argv: list[str]) -> int | None:
     has_help = bool(_HELP_FLAGS & set(argv))
     matches = sorted(
-        (key, parser.description or "")
-        for key, (_, parser) in _REGISTRY.items()
+        (key, entry["parser"].description or "")
+        for key, entry in _REGISTRY.items()
         if key.startswith(prefix + " ") and key != prefix
     )
     if matches:
@@ -328,7 +325,7 @@ def _show_namespace(prefix: str, argv: list[str]) -> int:
             sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
         sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
         return 0 if has_help else 1
-    return -1
+    return None
 
 
 def try_dispatch(argv: list[str]) -> int | None:
@@ -355,7 +352,7 @@ def try_dispatch(argv: list[str]) -> int | None:
                 continue
             if remaining and bool(_HELP_FLAGS & set(remaining)):
                 result = _show_namespace(key, argv)
-                if result >= 0:
+                if result is not None:
                     return result
             return _dispatch_one(_DEFAULTS[key], remaining)
 
@@ -375,8 +372,8 @@ def try_dispatch(argv: list[str]) -> int | None:
         return None
 
     matches = sorted(
-        (key, parser.description or "")
-        for key, (_, parser) in _REGISTRY.items()
+        (key, entry["parser"].description or "")
+        for key, entry in _REGISTRY.items()
         if key.startswith(prefix + " ") or key == prefix
     )
     if matches:
@@ -440,7 +437,7 @@ def dispatch(argv: list[str]) -> int:
     if result is not None:
         return result
     prog = argv[0] if argv else "app"
-    all_keys = sorted((k, p.description or "") for k, (_, p) in _REGISTRY.items())
+    all_keys = sorted((k, e["parser"].description or "") for k, e in _REGISTRY.items())
     lines = _collapse_commands(prog, [(f"{prog} {k}", desc) for k, desc in all_keys])
     col = max((len(cmd) for cmd, _ in lines), default=0)
     sys.stdout.write(f"usage: {prog} <command> [args]\n\ncommands:\n")
@@ -452,7 +449,7 @@ def dispatch(argv: list[str]) -> int:
 
 def run(argv: list[str] | None = None) -> None:
     try:
-        code = dispatch(argv if argv is not None else sys.argv[1:])
+        code = dispatch(argv if argv is not None else sys.argv)
     except UsageError as e:
         sys.stderr.write(f"{e}\n")
         sys.exit(1)
@@ -467,10 +464,6 @@ def alias(src: str, dst: str) -> None:
     if src not in _REGISTRY:
         raise KeyError(f"alias source {src!r} not registered")
     _REGISTRY[dst] = _REGISTRY[src]
-    if src in _REQUIRED_LISTS:
-        _REQUIRED_LISTS[dst] = _REQUIRED_LISTS[src]
-    if src in _META:
-        _META[dst] = _META[src]
 
 
 def alias_namespace(src: str, dst: str) -> None:
@@ -480,16 +473,13 @@ def alias_namespace(src: str, dst: str) -> None:
     dispatch the same function as `life log a`.
     """
     prefix = src + " "
-    to_add = {
-        dst + key[len(src) :]: val for key, val in list(_REGISTRY.items()) if key.startswith(prefix)
-    }
-    _REGISTRY.update(to_add)
-    for alias_key in to_add:
-        orig_key = src + alias_key[len(dst) :]
-        if orig_key in _REQUIRED_LISTS:
-            _REQUIRED_LISTS[alias_key] = _REQUIRED_LISTS[orig_key]
-        if orig_key in _META:
-            _META[alias_key] = _META[orig_key]
+    _REGISTRY.update(
+        {
+            dst + key[len(src) :]: entry
+            for key, entry in list(_REGISTRY.items())
+            if key.startswith(prefix)
+        }
+    )
 
 
 def commands() -> list[str]:
@@ -497,7 +487,7 @@ def commands() -> list[str]:
 
 
 def is_readonly(key: str) -> bool:
-    return _META.get(key, {}).get("readonly", False)
+    return _REGISTRY.get(key, {}).get("meta", {}).get("readonly", False)
 
 
 def readonly_commands() -> list[str]:
@@ -505,19 +495,55 @@ def readonly_commands() -> list[str]:
 
 
 def meta(key: str) -> dict[str, Any]:
-    return _META.get(key, {})
+    return _REGISTRY.get(key, {}).get("meta", {})
 
 
 def where(**kwargs: Any) -> list[str]:
     return sorted(
         k
         for k in _REGISTRY
-        if all(_META.get(k, {}).get(field) == value for field, value in kwargs.items())
+        if all(_REGISTRY[k]["meta"].get(field) == value for field, value in kwargs.items())
     )
 
 
-def entries() -> list[tuple[str, "Callable[..., Any]", "argparse.ArgumentParser"]]:
-    return [(key, fn, parser) for key, (fn, parser) in sorted(_REGISTRY.items())]
+def entries() -> list[tuple[str, Callable[..., Any], argparse.ArgumentParser]]:
+    return [(key, e["fn"], e["parser"]) for key, e in sorted(_REGISTRY.items())]
+
+
+def manifest() -> dict[str, Any]:
+    """Structured description of all registered commands, suitable for agent consumption.
+
+    Returns a flat dict keyed by command string. Each entry contains:
+      description, params (name, flags, type, required, default, help), meta.
+    """
+    result: dict[str, Any] = {}
+    for key, _, parser in entries():
+        params: list[dict[str, Any]] = []
+        for action in parser._actions:
+            if isinstance(action, argparse._HelpAction):  # type: ignore[reportPrivateUsage]
+                continue
+            if action.option_strings:
+                kind = "flag" if isinstance(action, argparse._StoreTrueAction) else "option"  # type: ignore[reportPrivateUsage]
+            else:
+                kind = "positional"
+            entry: dict[str, Any] = {
+                "name": action.dest,
+                "type": kind,
+                "required": action.required
+                if hasattr(action, "required")
+                else not action.option_strings,
+                "default": None if action.default is argparse.SUPPRESS else action.default,
+                "help": action.help or "",
+            }
+            if action.option_strings:
+                entry["flags"] = action.option_strings
+            params.append(entry)
+        result[key] = {
+            "description": parser.description or "",
+            "params": params,
+            "meta": _REGISTRY[key]["meta"],
+        }
+    return result
 
 
 def autodiscover(package_root: Path, package_name: str) -> None:
