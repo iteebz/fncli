@@ -31,7 +31,9 @@ _REGISTRY: dict[str, dict[str, Any]] = {}
 _DEFAULTS: dict[str, str] = {}
 _BARE: dict[str, Callable[..., Any]] = {}
 
-RESERVED: frozenset[str] = frozenset({"selftest"})  # names downstream CLIs should not register
+RESERVED: frozenset[str] = frozenset(
+    {"selftest", "completions", "__complete"}
+)  # names downstream CLIs should not register
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
@@ -305,6 +307,90 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
     return 1 if failed else 0
 
 
+def _complete(argv: list[str]) -> int:
+    """Handle `prog __complete word1 word2 ...` — outputs one candidate per line."""
+    # argv = ["prog", "__complete", "prog", "word1", ..., "cur"]
+    words = argv[2:]  # COMP_WORDS passed by shell
+    if not words:
+        return 0
+    prog = words[0]
+    typed = words[1:]  # tokens after program name
+    cur = typed[-1] if typed else ""  # word currently being typed
+    preceding = typed[:-1]  # already-complete tokens
+
+    # Build command key from non-flag preceding tokens
+    cmd_parts = [prog] + [p for p in preceding if not p.startswith("-")]
+
+    # Find deepest matching command key
+    cmd_key: str | None = None
+    for depth in range(len(cmd_parts), 0, -1):
+        candidate = " ".join(cmd_parts[:depth])
+        if candidate in _REGISTRY or any(k.startswith(candidate + " ") for k in _REGISTRY):
+            cmd_key = candidate
+            break
+
+    seen: set[str] = set()
+
+    def emit(s: str) -> None:
+        if s not in seen and s.startswith(cur):
+            sys.stdout.write(s + "\n")
+            seen.add(s)
+
+    # Subcommands at current depth
+    search_prefix = (cmd_key + " ") if cmd_key else (prog + " ")
+    for key in _REGISTRY:
+        if key.startswith(search_prefix):
+            rest = key[len(search_prefix) :]
+            token = rest.split(" ")[0]
+            if token:
+                emit(token)
+
+    # Flags for the matched command (always offer, user may start with -)
+    if cmd_key and cmd_key in _REGISTRY:
+        parser = _REGISTRY[cmd_key]["parser"]
+        for action in parser._actions:
+            if isinstance(action, argparse._HelpAction):  # type: ignore[reportPrivateUsage]
+                continue
+            for flag in action.option_strings:
+                emit(flag)
+
+    return 0
+
+
+def _completions(prog: str, shell: str) -> int:
+    """Output a shell completion bootstrap script for `prog`."""
+    if shell == "bash":
+        sys.stdout.write(
+            f"_{prog}_complete() {{\n"
+            f"    local IFS=$'\\n'\n"
+            f"    COMPREPLY=($('{prog}' __complete \"${{COMP_WORDS[@]}}\" 2>/dev/null))\n"
+            f"}}\n"
+            f"complete -F _{prog}_complete '{prog}'\n"
+        )
+    elif shell == "zsh":
+        sys.stdout.write(
+            f"_{prog}() {{\n"
+            f"    local -a completions\n"
+            f'    completions=(${{(f)"$(\'{prog}\' __complete "${{words[@]}}" 2>/dev/null)"}})\n'
+            f"    compadd -a completions\n"
+            f"}}\n"
+            f"compdef _{prog} '{prog}'\n"
+        )
+    elif shell == "fish":
+        sys.stdout.write(
+            f"function __{prog}_complete\n"
+            f"    set -l tokens (commandline -opc)\n"
+            f"    set -a tokens (commandline -ct)\n"
+            f"    '{prog}' __complete $tokens 2>/dev/null\n"
+            f"end\n"
+            f"complete -c '{prog}' -f -a '(__{prog}_complete)'\n"
+        )
+    else:
+        sys.stderr.write(f"completions: unknown shell {shell!r}. Use bash, zsh, or fish.\n")
+        return 1
+    return 0
+
+
 def _subcommand_matches(prefix: str, token: str) -> bool:
     candidate = prefix + " " + token
     return any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
@@ -331,6 +417,11 @@ def _show_namespace(prefix: str, argv: list[str]) -> int | None:
 def try_dispatch(argv: list[str]) -> int | None:
     if len(argv) >= 2 and argv[1] == "selftest":
         return _selftest(argv[0], live="--live" in argv[2:], quiet="--quiet" in argv[2:])
+    if len(argv) >= 2 and argv[1] == "__complete":
+        return _complete(argv)
+    if len(argv) >= 2 and argv[1] == "completions":
+        shell = argv[2] if len(argv) > 2 else "bash"
+        return _completions(argv[0], shell)
     for depth in range(len(argv), 0, -1):
         key = " ".join(argv[:depth])
         if key in _REGISTRY:

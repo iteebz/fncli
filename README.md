@@ -102,8 +102,6 @@ def build(target: str | None = None, output: str = "dist"): ...
 - `["-o", "--output"]` — custom flag names (short + long)
 - `[]` — positional-optional: consumed by position rather than flag name (`nargs="?"`)
 
-Without `flags`, params with defaults become `--param-name` flags automatically.
-
 ## Aliases
 
 ```python
@@ -133,8 +131,6 @@ def start(port: int = 8080): ...
 
 ## Bare callback
 
-Run arbitrary code when a namespace is invoked with no subcommand or flags:
-
 ```python
 fncli.bare("myapp", lambda: print("welcome"))
 # `myapp` → prints welcome
@@ -159,24 +155,14 @@ Return an int to set the exit code explicitly. `None` / no return → exit 0.
 
 ## Entrypoint
 
-`dispatch` and `try_dispatch` expect `argv[0]` to be the program name, matching the namespace used in `@cli()`:
+`argv[0]` must match the namespace used in `@cli()`:
 
 ```python
 def main():
     fncli.run(["myapp", *sys.argv[1:]])
 ```
 
-Or with autodiscovery:
-
-```python
-def main():
-    fncli.autodiscover(Path(__file__).parent, "myapp")
-    fncli.run(["myapp", *sys.argv[1:]])
-```
-
-## Autodiscovery
-
-Scans the package for any `.py` file containing `@cli(` and imports it. No routing table, no manual imports.
+`autodiscover` scans the package for files containing `@cli(` and imports them — no routing table:
 
 ```python
 from pathlib import Path
@@ -199,6 +185,18 @@ Unknown commands get fuzzy suggestions:
 $ myapp strat
 Unknown command: strat. Did you mean: start, status?
 ```
+
+## Shell completions
+
+Every CLI gets tab completion for free — subcommands and flags, derived from the registry at runtime.
+
+```bash
+myapp completions zsh > ~/.zsh/completions/_myapp   # bash, zsh, fish supported
+```
+
+Or inline in shell config: `eval "$(myapp completions zsh)"`. Typically called from `install.sh` — zero work for CLI authors.
+
+`completions` and `__complete` are hidden from `--help` and added to `RESERVED`.
 
 ## Selftest
 
@@ -244,4 +242,4 @@ fncli.where(**kwargs)      # sorted list of keys matching metadata predicates
 | `is_readonly` | `(key)` | bool — was key registered with `readonly=True` |
 | `readonly_commands` | `()` | sorted list of readonly keys |
 | `UsageError` | | raise inside a command for clean stderr + exit 1 |
-| `RESERVED` | | frozenset of names downstream CLIs should not register (`{"selftest"}`) |
+| `RESERVED` | | frozenset of names downstream CLIs should not register (`{"selftest", "completions", "__complete"}`) |
