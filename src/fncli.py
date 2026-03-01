@@ -15,6 +15,7 @@ import difflib
 import importlib
 import inspect
 import io
+import os
 import sys
 import traceback
 import types
@@ -39,6 +40,21 @@ _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 class UsageError(Exception):
     pass
+
+
+class RegistrationError(Exception):
+    pass
+
+
+def _strict_discover() -> bool:
+    value = os.environ.get("FNCLI_STRICT_DISCOVER", "")
+    return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+def _assert_key_available(key: str, fn: Callable[..., Any]) -> None:
+    existing = _REGISTRY.get(key)
+    if existing and existing["fn"] is not fn:
+        raise RegistrationError(f"command key {key!r} already registered")
 
 
 def _unwrap_optional(ann: Any) -> Any:
@@ -88,6 +104,9 @@ def cli(
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         _name = name if name is not None else fn.__name__.replace("_", "-")
         key = f"{parent} {_name}".strip() if parent else _name
+        _assert_key_available(key, fn)
+        if _name in RESERVED:
+            raise RegistrationError(f"command name {_name!r} is reserved")
         desc = description or fn.__doc__ or ""
         _flags = flags or {}
         _help = help or {}
@@ -178,7 +197,10 @@ def cli(
         }
         _REGISTRY[key] = entry
         for alias in aliases or []:
+            if alias in RESERVED:
+                raise RegistrationError(f"alias name {alias!r} is reserved")
             alias_key = f"{parent} {alias}".strip() if parent else alias
+            _assert_key_available(alias_key, fn)
             _REGISTRY[alias_key] = entry
         if default and parent:
             _DEFAULTS[parent] = key
@@ -554,6 +576,10 @@ def alias(src: str, dst: str) -> None:
     """
     if src not in _REGISTRY:
         raise KeyError(f"alias source {src!r} not registered")
+    src_entry = _REGISTRY[src]
+    existing = _REGISTRY.get(dst)
+    if existing and existing is not src_entry:
+        raise RegistrationError(f"alias destination {dst!r} already registered")
     _REGISTRY[dst] = _REGISTRY[src]
 
 
@@ -564,13 +590,16 @@ def alias_namespace(src: str, dst: str) -> None:
     dispatch the same function as `life log a`.
     """
     prefix = src + " "
-    _REGISTRY.update(
-        {
-            dst + key[len(src) :]: entry
-            for key, entry in list(_REGISTRY.items())
-            if key.startswith(prefix)
-        }
-    )
+    updates: dict[str, dict[str, Any]] = {}
+    for key, entry in list(_REGISTRY.items()):
+        if not key.startswith(prefix):
+            continue
+        new_key = dst + key[len(src) :]
+        existing = _REGISTRY.get(new_key)
+        if existing and existing is not entry:
+            raise RegistrationError(f"alias namespace destination {new_key!r} already registered")
+        updates[new_key] = entry
+    _REGISTRY.update(updates)
 
 
 def commands() -> list[str]:
@@ -647,6 +676,8 @@ def autodiscover(package_root: Path, package_name: str) -> None:
             if "@cli(" not in path.read_text():
                 continue
         except OSError:
+            if _strict_discover():
+                raise
             continue
         rel = path.resolve().relative_to(import_root)
         mod = ".".join(rel.with_suffix("").parts)

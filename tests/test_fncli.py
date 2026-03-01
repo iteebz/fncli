@@ -4,6 +4,7 @@ import pytest
 
 import fncli
 from fncli import (
+    RegistrationError,
     UsageError,
     bare,
     cli,
@@ -61,6 +62,26 @@ def test_underscore_to_hyphen():
         pass
 
     assert "list-all" in commands()
+
+
+def test_register_duplicate_key_raises():
+    @cli("app")
+    def status():
+        pass
+
+    with pytest.raises(RegistrationError):
+
+        @cli("app", name="status")
+        def other():
+            pass
+
+
+def test_register_reserved_name_raises():
+    with pytest.raises(RegistrationError):
+
+        @cli(name="selftest")
+        def reserved():
+            pass
 
 
 # --- argument parsing ---
@@ -498,6 +519,32 @@ def test_alias_namespace_copies_meta():
     assert is_readonly("app add entry") is True
 
 
+def test_alias_conflict_raises():
+    @cli("app")
+    def status():
+        pass
+
+    @cli("app")
+    def health():
+        pass
+
+    with pytest.raises(RegistrationError):
+        fncli.alias("app status", "app health")
+
+
+def test_alias_namespace_conflict_raises():
+    @cli("app log")
+    def source_entry():
+        pass
+
+    @cli("app", name="source-entry")
+    def app_entry():
+        pass
+
+    with pytest.raises(RegistrationError):
+        fncli.alias_namespace("app log", "app")
+
+
 def test_readonly_is_meta_sugar():
     @cli("app", readonly=True)
     def status():
@@ -707,3 +754,23 @@ def test_help_dict_partial(capsys):
     assert result == 0
     out = capsys.readouterr().out
     assert "who to greet" in out
+
+
+def test_autodiscover_strict_discover_on_read_error(tmp_path, monkeypatch):
+    pkg_root = tmp_path / "pkg"
+    pkg_root.mkdir()
+    (pkg_root / "__init__.py").write_text("")
+    bad_file = pkg_root / "cmd.py"
+    bad_file.write_text("@cli()\ndef x():\n    pass\n")
+
+    original_read_text = fncli.Path.read_text
+
+    def boom(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self == bad_file:
+            raise OSError("read fail")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(fncli.Path, "read_text", boom)
+    monkeypatch.setenv("FNCLI_STRICT_DISCOVER", "1")
+    with pytest.raises(OSError):
+        fncli.autodiscover(pkg_root, "pkg")
