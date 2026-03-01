@@ -1,6 +1,6 @@
 """fncli — function signature as CLI spec.
 
-    from fncli import cli, run, UsageError
+    from fncli import cli, run, UsageError, StateError
 
     @cli("myapp")
     def status(all: bool = False):
@@ -40,6 +40,15 @@ _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 class UsageError(Exception):
     pass
+
+
+class StateError(Exception):
+    """State error — command was understood, but the object is in the wrong state.
+
+    Unlike UsageError, this does NOT append 'Run --help for usage.' —
+    the caller used the CLI correctly; the issue is state, not syntax.
+    """
+
 
 
 class RegistrationError(Exception):
@@ -220,6 +229,9 @@ def cli(
             try:
                 result = fn(**vars(parsed))
                 sys.exit(result if isinstance(result, int) else 0)
+            except StateError as e:
+                sys.stderr.write(f"{e}\n")
+                sys.exit(1)
             except UsageError as e:
                 sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
                 sys.exit(1)
@@ -258,6 +270,9 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
     try:
         result = fn(**vars(args))
         return result if isinstance(result, int) else 0
+    except StateError as e:
+        sys.stderr.write(f"{e}\n")
+        return 1
     except UsageError as e:
         sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
         return 1
@@ -477,7 +492,7 @@ def try_dispatch(argv: list[str]) -> int | None:
         try:
             result = _BARE[prefix]()
             return result if isinstance(result, int) else 0
-        except UsageError as e:
+        except (StateError, UsageError) as e:
             sys.stderr.write(f"{e}\n")
             return 1
 
@@ -563,7 +578,7 @@ def dispatch(argv: list[str]) -> int:
 def run(argv: list[str] | None = None) -> None:
     try:
         code = dispatch(argv if argv is not None else sys.argv)
-    except UsageError as e:
+    except (StateError, UsageError) as e:
         sys.stderr.write(f"{e}\n")
         sys.exit(1)
     sys.exit(code)
