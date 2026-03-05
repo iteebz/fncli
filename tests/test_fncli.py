@@ -10,8 +10,8 @@ from fncli import (
     cli,
     commands,
     dispatch,
-    is_readonly,
     meta,
+    readonly,
     try_dispatch,
     where,
 )
@@ -519,7 +519,7 @@ def test_alias_copies_meta():
 
     fncli.alias("app backup", "app bk")
     assert meta("app bk") == {"audience": "us", "readonly": True}
-    assert is_readonly("app bk") is True
+    assert readonly("app bk") is True
 
 
 def test_alias_namespace_copies_meta():
@@ -529,7 +529,7 @@ def test_alias_namespace_copies_meta():
 
     fncli.alias_namespace("app log", "app add")
     assert meta("app add entry") == {"audience": "us", "readonly": True}
-    assert is_readonly("app add entry") is True
+    assert readonly("app add entry") is True
 
 
 def test_alias_conflict_raises():
@@ -564,7 +564,7 @@ def test_readonly_is_meta_sugar():
         pass
 
     assert meta("app status") == {"readonly": True}
-    assert is_readonly("app status") is True
+    assert readonly("app status") is True
     assert where(readonly=True) == ["app status"]
 
 
@@ -574,7 +574,7 @@ def test_readonly_merges_with_meta():
         pass
 
     assert meta("app status") == {"audience": "them", "readonly": True}
-    assert is_readonly("app status") is True
+    assert readonly("app status") is True
     assert where(audience="them", readonly=True) == ["app status"]
 
 

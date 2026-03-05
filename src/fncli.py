@@ -25,10 +25,6 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# State
-# ---------------------------------------------------------------------------
-
 # _REGISTRY: command key → {fn, parser, meta}
 # _DEFAULTS: namespace → default command key
 # _BARE:     namespace → bare callback
@@ -38,10 +34,6 @@ _BARE: dict[str, Callable[..., Any]] = {}
 
 RESERVED: frozenset[str] = frozenset({"selftest", "completions", "__complete"})
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
 
 
 class UsageError(Exception):
@@ -58,11 +50,6 @@ class StateError(Exception):
 
 class RegistrationError(Exception):
     pass
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _strict_discover() -> bool:
@@ -136,11 +123,6 @@ def _collapse_commands(prefix: str, matches: list[tuple[str, str]]) -> list[tupl
     return lines
 
 
-# ---------------------------------------------------------------------------
-# Argument building
-# ---------------------------------------------------------------------------
-
-
 def _add_param(
     parser: argparse.ArgumentParser,
     pname: str,
@@ -211,9 +193,7 @@ def _add_param(
     parser.add_argument(*flag_names, **kwargs)
 
 
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
+# --- Registration ---
 
 
 def bare(namespace: str, fn: Callable[..., Any]) -> None:
@@ -293,9 +273,7 @@ def cli(
     return decorator
 
 
-# ---------------------------------------------------------------------------
-# Dispatch
-# ---------------------------------------------------------------------------
+# --- Dispatch ---
 
 
 def _dispatch_one(key: str, argv: list[str]) -> int:
@@ -432,9 +410,7 @@ def run(argv: list[str] | None = None) -> None:
     sys.exit(code)
 
 
-# ---------------------------------------------------------------------------
-# Testing
-# ---------------------------------------------------------------------------
+# --- Testing ---
 
 
 class Result:
@@ -463,9 +439,7 @@ def invoke(argv: list[str]) -> Result:
     return Result(code, out.getvalue(), err.getvalue())
 
 
-# ---------------------------------------------------------------------------
-# Aliases
-# ---------------------------------------------------------------------------
+# --- Aliases ---
 
 
 def alias(src: str, dst: str) -> None:
@@ -494,21 +468,15 @@ def alias_namespace(src: str, dst: str) -> None:
     _REGISTRY.update(updates)
 
 
-# ---------------------------------------------------------------------------
-# Introspection
-# ---------------------------------------------------------------------------
+# --- Introspection ---
 
 
 def commands() -> list[str]:
     return sorted(_REGISTRY)
 
 
-def is_readonly(key: str) -> bool:
+def readonly(key: str) -> bool:
     return _REGISTRY.get(key, {}).get("meta", {}).get("readonly", False)
-
-
-def readonly_commands() -> list[str]:
-    return where(readonly=True)
 
 
 def meta(key: str) -> dict[str, Any]:
@@ -559,9 +527,7 @@ def manifest() -> dict[str, Any]:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Built-in commands
-# ---------------------------------------------------------------------------
+# --- Built-in commands ---
 
 
 def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
@@ -582,7 +548,7 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
         except Exception:
             result["help"] = "FAIL"
 
-        if live and is_readonly(key):
+        if live and readonly(key):
             sig = inspect.signature(fn)
             if not any(p.default is inspect.Parameter.empty for p in sig.parameters.values()):
                 try:
@@ -713,9 +679,7 @@ def _completions(prog: str, shell: str) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# Discovery
-# ---------------------------------------------------------------------------
+# --- Discovery ---
 
 
 def autodiscover(package_root: Path, package_name: str) -> None:

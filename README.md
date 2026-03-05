@@ -3,7 +3,6 @@
 Turn any function into a CLI. One decorator. Zero ceremony.
 
 ```python
-# myapp/commands.py
 from fncli import cli
 
 @cli("myapp")
@@ -29,7 +28,7 @@ deploying to prod
 
 Signature → argparse. Docstring → help. Types → validation. One file, no dependencies.
 
-**File structure and command tree are independent.** `@cli` can go anywhere — one file can register commands under multiple namespaces. Where you put the code is an implementation detail; the CLI shape is declared by the decorator.
+**File structure and command tree are independent.** `@cli` can go anywhere — one file can register commands under multiple namespaces. The CLI shape is declared by the decorator, not the file layout.
 
 ## Install
 
@@ -45,17 +44,17 @@ pip install fncli
 | `n: int` | required positional, coerced to int |
 | `verbose: bool = False` | `--verbose` flag |
 | `count: int = 10` | `--count 10` optional flag |
-| `tags: list[str]` | positional varargs, one or more (`nargs="+"`) |
+| `tags: list[str]` | positional varargs (`nargs="+"`) |
 | `tags: list[str] = []` | `--tags a b c` optional flag (`nargs="*"`) |
 | `filter: str \| None = None` | `--filter` optional flag |
 
 Underscores in param names → hyphenated flags: `dry_run` → `--dry-run`.
 Underscores in function names → hyphenated commands: `list_all` → `list-all`.
-Trailing `_` stripped — avoids reserved words: `json_: bool = False` → `--json`.
+Trailing `_` stripped for reserved words: `type_: str` → `--type`.
 
 ## Subcommands
 
-The first argument to `@cli()` is the parent namespace. Omit it for top-level commands.
+First argument to `@cli()` is the parent namespace. Omit for top-level.
 
 ```python
 @cli()
@@ -66,59 +65,47 @@ def status(): ...                     # → "myapp status"
 
 @cli("myapp server")
 def start(port: int = 8080): ...      # → "myapp server start"
-
-@cli("myapp server")
-def stop(force: bool = False): ...    # → "myapp server stop"
 ```
 
 Dispatch is longest-match: `myapp server start` wins over `myapp server`.
-`myapp server --help` auto-lists all subcommands under that namespace.
+`myapp server --help` auto-lists subcommands.
 
 ## `@cli()` options
 
 ```python
 @cli(
-    "myapp",               # parent namespace (str or None)
-    name="st",             # override command name (default: fn.__name__, underscores → hyphens)
+    "myapp",               # parent namespace
+    name="st",             # override command name (default: fn.__name__)
     description="...",     # override help text (default: fn.__doc__)
-    flags={...},           # see Flags
-    help={...},            # per-param help strings: {"param": "description"}
-    required=["param"],    # force a flag to be required even if it has a default
-    aliases=["s"],         # additional keys that dispatch to this handler
-    default=True,          # run this when parent is invoked bare: `myapp` → runs this fn
-    readonly=True,         # tag command; query with is_readonly() / readonly_commands()
-    meta={...},            # arbitrary metadata; query with meta(key) / where(**kwargs)
+    flags={...},           # custom flag names or positional-optional
+    help={...},            # per-param help: {"param": "description"}
+    required=["param"],    # force a flag to be required
+    aliases=["s"],         # additional dispatch keys
+    default=True,          # run when parent is invoked bare
+    readonly=True,         # metadata tag; query with readonly()
+    meta={...},            # arbitrary metadata; query with meta() / where()
 )
 ```
 
 ## Flags
-
-`flags` overrides how specific parameters are parsed:
 
 ```python
 @cli("myapp", flags={"output": ["-o", "--output"], "target": []})
 def build(target: str | None = None, output: str = "dist"): ...
 ```
 
-- `["-o", "--output"]` — custom flag names (short + long)
-- `[]` — positional-optional: consumed by position rather than flag name (`nargs="?"`)
+- `["-o", "--output"]` — custom short + long flags
+- `[]` — positional-optional: consumed by position (`nargs="?"`)
 
 ## Aliases
 
 ```python
-# inline — same handler, multiple keys
 @cli("myapp", aliases=["s", "stat"])
 def status(): ...
 # myapp s, myapp stat, myapp status all work
 
-# cross-namespace single command
 fncli.alias("myapp server tail", "myapp tail")
-
-# clone an entire namespace at registration time
-fncli.alias_namespace("myapp log", "myapp add")
-# copies every "myapp log *" entry to "myapp add *"
-# e.g. "myapp log entry" → also "myapp add entry"
-# note: snapshot at call time — commands registered after won't be included
+fncli.alias_namespace("myapp log", "myapp add")  # snapshot at call time
 ```
 
 ## Default subcommand
@@ -126,7 +113,7 @@ fncli.alias_namespace("myapp log", "myapp add")
 ```python
 @cli("myapp server", default=True)
 def start(port: int = 8080): ...
-# `myapp server` (bare) → runs start
+# `myapp server` → runs start
 # `myapp server start` also works
 ```
 
@@ -136,49 +123,35 @@ def start(port: int = 8080): ...
 fncli.bare("myapp", lambda: print("welcome"))
 # `myapp` → prints welcome
 # `myapp --help` → shows subcommand list (bare is skipped)
-# `myapp start` → dispatches start (bare is skipped)
 ```
 
 ## Error handling
 
-`UsageError` prints a clean message to stderr and exits 1, no traceback:
-
 ```python
-from fncli import UsageError
+from fncli import UsageError, StateError
 
 @cli("myapp")
 def deploy(env: str):
     if env not in ("staging", "prod"):
-        raise UsageError(f"unknown env: {env}")
+        raise UsageError(f"unknown env: {env}")  # clean stderr + exit 1
 ```
 
-Return an int to set the exit code explicitly. `None` / no return → exit 0.
+`UsageError` appends "Run --help for usage." `StateError` does not (correct usage, wrong state).
+Return an int to set exit code. `None` / no return → exit 0.
 
 ## Entrypoint
 
-`argv[0]` must match the namespace used in `@cli()`:
-
 ```python
-def main():
-    fncli.run(["myapp", *sys.argv[1:]])
+fncli.run(["myapp", *sys.argv[1:]])       # dispatch + sys.exit
+fncli.dispatch(argv)                       # returns exit code; prints help on miss
+fncli.try_dispatch(argv)                   # returns None on miss
 ```
 
-`autodiscover` scans the package for files containing `@cli(` and imports them — no routing table:
+`autodiscover` scans for `@cli(` and imports — no routing table:
 
 ```python
-from pathlib import Path
-import fncli
-
 fncli.autodiscover(Path(__file__).parent, "myapp")
 fncli.run(["myapp", *sys.argv[1:]])
-```
-
-## Dispatch
-
-```python
-fncli.run(argv)           # dispatch argv, then sys.exit(code). argv[0] = program name.
-fncli.dispatch(argv)      # dispatch; prints help + returns 1 if nothing matched
-fncli.try_dispatch(argv)  # dispatch; returns None if nothing matched (use when sharing argv)
 ```
 
 Unknown commands get fuzzy suggestions:
@@ -189,74 +162,39 @@ Unknown command: strat. Did you mean: start, status?
 
 ## Testing
 
-`invoke()` captures stdout, stderr, and exit code — including `SystemExit`. Use it in integration tests instead of calling `dispatch()` directly.
+`invoke()` captures stdout, stderr, and exit code — traps `SystemExit`:
 
 ```python
-from fncli import invoke
-
-result = invoke(["myapp", "deploy", "prod"])
+result = fncli.invoke(["myapp", "deploy", "prod"])
 assert result.exit_code == 0
 assert "deploying to prod" in result.stdout
 ```
 
-Returns a `Result` with `.exit_code`, `.stdout`, `.stderr`.
-
 ## Shell completions
 
-Every CLI gets tab completion for free — subcommands and flags, derived from the registry at runtime.
-
 ```bash
-myapp completions zsh > ~/.zsh/completions/_myapp   # bash, zsh, fish supported
+eval "$(myapp completions zsh)"   # bash, zsh, fish
 ```
 
-Or inline in shell config: `eval "$(myapp completions zsh)"`. Typically called from `install.sh` — zero work for CLI authors.
-
-`completions` and `__complete` are hidden from `--help` and added to `RESERVED`.
+Subcommands and flags derived from the registry at runtime. `completions` and `__complete` are hidden from `--help`.
 
 ## Selftest
-
-Every CLI gets a hidden `selftest` command for free:
 
 ```
 $ myapp selftest           # smoke-test --help on all commands
 $ myapp selftest --live    # also run readonly no-arg commands
-$ myapp selftest --quiet   # summary only; failures still surfaced
+$ myapp selftest --quiet   # summary only
 ```
 
-Hidden from `--help`. Useful in CI: `uv run myapp selftest`.
+Hidden from `--help`. Useful in CI.
 
 ## Introspection
 
 ```python
 fncli.commands()           # sorted list of all registered keys
-fncli.entries()            # [(key, fn, parser), ...] for all registered commands
-fncli.manifest()           # flat dict of all commands with params, types, defaults, meta
-fncli.is_readonly(key)     # True if registered with readonly=True
-fncli.readonly_commands()  # sorted list of readonly keys
-fncli.meta(key)            # dict of metadata for key
-fncli.where(**kwargs)      # sorted list of keys matching metadata predicates
+fncli.entries()            # [(key, fn, parser), ...]
+fncli.manifest()           # structured dict of all commands — for agents
+fncli.meta(key)            # metadata dict for key
+fncli.where(**kwargs)      # keys matching metadata predicates
+fncli.readonly(key)        # True if readonly=True
 ```
-
-## API reference
-
-| symbol | signature | description |
-|---|---|---|
-| `cli` | `(parent?, *, name, description, flags, help, required, aliases, default, readonly, meta)` | decorator — register fn as command |
-| `bare` | `(namespace, fn)` | register a callback for bare namespace invocation |
-| `run` | `(argv)` | dispatch + sys.exit; argv[0] = program name |
-| `dispatch` | `(argv)` | dispatch; prints help and returns 1 on miss |
-| `try_dispatch` | `(argv)` | dispatch; returns None on miss |
-| `invoke` | `(argv) → Result` | dispatch capturing stdout/stderr/exit_code; traps SystemExit |
-| `Result` | `.exit_code`, `.stdout`, `.stderr` | return type of `invoke()` |
-| `alias` | `(src, dst)` | point key `dst` at the same handler as `src` |
-| `alias_namespace` | `(src, dst)` | clone all `src *` commands to `dst *` at call time |
-| `autodiscover` | `(root: Path, pkg: str)` | scan package, import files containing `@cli(` |
-| `commands` | `()` | sorted list of registered keys |
-| `entries` | `()` | `[(key, fn, parser), ...]` |
-| `manifest` | `()` | flat dict — all commands with description, params, meta; for agent consumption |
-| `meta` | `(key)` | metadata dict for key |
-| `where` | `(**kwargs)` | sorted list of keys matching metadata predicates |
-| `is_readonly` | `(key)` | bool — was key registered with `readonly=True` |
-| `readonly_commands` | `()` | sorted list of readonly keys |
-| `UsageError` | | raise inside a command for clean stderr + exit 1 |
-| `RESERVED` | | frozenset of names downstream CLIs should not register (`{"selftest", "completions", "__complete"}`) |
