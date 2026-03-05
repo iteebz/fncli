@@ -187,6 +187,20 @@ $ myapp strat
 Unknown command: strat. Did you mean: start, status?
 ```
 
+## Testing
+
+`invoke()` captures stdout, stderr, and exit code — including `SystemExit`. Use it in integration tests instead of calling `dispatch()` directly.
+
+```python
+from fncli import invoke
+
+result = invoke(["myapp", "deploy", "prod"])
+assert result.exit_code == 0
+assert "deploying to prod" in result.stdout
+```
+
+Returns a `Result` with `.exit_code`, `.stdout`, `.stderr`.
+
 ## Shell completions
 
 Every CLI gets tab completion for free — subcommands and flags, derived from the registry at runtime.
@@ -232,6 +246,8 @@ fncli.where(**kwargs)      # sorted list of keys matching metadata predicates
 | `run` | `(argv)` | dispatch + sys.exit; argv[0] = program name |
 | `dispatch` | `(argv)` | dispatch; prints help and returns 1 on miss |
 | `try_dispatch` | `(argv)` | dispatch; returns None on miss |
+| `invoke` | `(argv) → Result` | dispatch capturing stdout/stderr/exit_code; traps SystemExit |
+| `Result` | `.exit_code`, `.stdout`, `.stderr` | return type of `invoke()` |
 | `alias` | `(src, dst)` | point key `dst` at the same handler as `src` |
 | `alias_namespace` | `(src, dst)` | clone all `src *` commands to `dst *` at call time |
 | `autodiscover` | `(root: Path, pkg: str)` | scan package, import files containing `@cli(` |

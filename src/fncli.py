@@ -1,6 +1,6 @@
 """fncli — function signature as CLI spec.
 
-    from fncli import cli, run, UsageError, StateError
+    from fncli import cli, run, invoke, Result, UsageError, StateError
 
     @cli("myapp")
     def status(all: bool = False):
@@ -599,6 +599,35 @@ def run(argv: list[str] | None = None) -> None:
         sys.stderr.write(f"{e}\n")
         sys.exit(1)
     sys.exit(code)
+
+
+class Result:
+    """Captured output from invoke()."""
+
+    __slots__ = ("exit_code", "stderr", "stdout")
+
+    def __init__(self, exit_code: int, stdout: str, stderr: str):
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+
+    def __repr__(self) -> str:
+        return f"Result(exit_code={self.exit_code})"
+
+
+def invoke(argv: list[str]) -> Result:
+    """Run a dispatch cycle, capturing stdout/stderr and trapping SystemExit.
+
+    argv follows the same convention as dispatch(): argv[0] is the program name.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    code = 0
+    try:
+        with redirect_stdout(out), redirect_stderr(err):
+            code = dispatch(argv)
+    except SystemExit as e:
+        code = int(e.code) if e.code is not None else 1
+    return Result(code, out.getvalue(), err.getvalue())
 
 
 def alias(src: str, dst: str) -> None:

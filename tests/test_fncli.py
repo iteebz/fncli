@@ -769,6 +769,61 @@ def test_help_dict_partial(capsys):
     assert "who to greet" in out
 
 
+# --- invoke ---
+
+
+def test_invoke_captures_stdout():
+    @cli("testapp")
+    def hello():
+        """say hi"""
+        sys.stdout.write("hello world\n")
+
+    result = fncli.invoke(["testapp", "hello"])
+    assert result.exit_code == 0
+    assert "hello world" in result.stdout
+    assert result.stderr == ""
+
+
+def test_invoke_nonzero_exit_code():
+    @cli("testapp")
+    def fail():
+        """always fails"""
+        return 1
+
+    result = fncli.invoke(["testapp", "fail"])
+    assert result.exit_code == 1
+
+
+def test_invoke_captures_stderr_on_usage_error():
+    @cli("testapp")
+    def bad():
+        """boom"""
+        raise UsageError("wrong input")
+
+    result = fncli.invoke(["testapp", "bad"])
+    assert result.exit_code == 1
+    assert "wrong input" in result.stderr
+
+
+def test_invoke_traps_system_exit():
+    @cli("testapp")
+    def exits():
+        """calls sys.exit"""
+        sys.exit(42)
+
+    result = fncli.invoke(["testapp", "exits"])
+    assert result.exit_code == 42
+
+
+def test_invoke_repr():
+    @cli("testapp")
+    def ok():
+        """ok"""
+
+    result = fncli.invoke(["testapp", "ok"])
+    assert repr(result) == "Result(exit_code=0)"
+
+
 def test_autodiscover_strict_discover_on_read_error(tmp_path, monkeypatch):
     pkg_root = tmp_path / "pkg"
     pkg_root.mkdir()
