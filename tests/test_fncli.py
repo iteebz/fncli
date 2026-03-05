@@ -111,6 +111,19 @@ def test_flag_with_default():
     assert captured[-1] is True
 
 
+def test_bool_flag_default_true_generates_no_prefix():
+    captured: list[bool] = []
+
+    @cli()
+    def run(verbose: bool = True):
+        captured.append(verbose)
+
+    dispatch(["run"])
+    assert captured[-1] is True, "bool=True default: omitting the flag should leave it True"
+    dispatch(["run", "--no-verbose"])
+    assert captured[-1] is False, "--no-verbose should flip it to False"
+
+
 def test_optional_str_default_none(capsys):
     captured: list[str | None] = []
 

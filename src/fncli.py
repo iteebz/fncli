@@ -50,7 +50,6 @@ class StateError(Exception):
     """
 
 
-
 class RegistrationError(Exception):
     pass
 
@@ -165,9 +164,18 @@ def cli(
                         help=param_help,
                     )
             elif raw is bool:
-                parser.add_argument(
-                    *flag_names, dest=pname, action="store_true", default=False, help=param_help
+                bool_default = (
+                    param.default if param.default is not inspect.Parameter.empty else False
                 )
+                if bool_default is True:
+                    no_flags = [f"--no-{n[2:]}" if n.startswith("--") else n for n in flag_names]
+                    parser.add_argument(
+                        *no_flags, dest=pname, action="store_false", default=True, help=param_help
+                    )
+                else:
+                    parser.add_argument(
+                        *flag_names, dest=pname, action="store_true", default=False, help=param_help
+                    )
             elif positional_optional:
                 parser.add_argument(
                     pname, type=raw, nargs="?", default=param.default, help=param_help
