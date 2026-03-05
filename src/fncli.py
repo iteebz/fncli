@@ -261,7 +261,9 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
         and "-h" not in argv
     ):
         names = ", ".join(f"<{n}>" for n in req)
-        sys.stderr.write(f"{key}: {names} required. Run `{key} --help` for usage.\n")
+        msg = f"{key}: {names} required. Run `{key} --help` for usage.\n"
+        sys.stderr.write(msg)
+        sys.stdout.write(msg)
         return 1
     stderr_buf = io.StringIO()
     try:
@@ -272,8 +274,11 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
         stderr_out = stderr_buf.getvalue()
         if stderr_out:
             sys.stderr.write(stderr_out)
+            sys.stdout.write(stderr_out)
         elif code != 0:
-            sys.stderr.write(f"{key}: invalid arguments. Run `{key} --help`.\n")
+            msg = f"{key}: invalid arguments. Run `{key} --help`.\n"
+            sys.stderr.write(msg)
+            sys.stdout.write(msg)
         return code
     try:
         result = fn(**vars(args))
@@ -282,7 +287,9 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
         sys.stderr.write(f"{e}\n")
         return 1
     except UsageError as e:
-        sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
+        msg = f"{e}\nRun `{key} --help` for usage.\n"
+        sys.stderr.write(msg)
+        sys.stdout.write(msg)
         return 1
 
 
@@ -501,7 +508,9 @@ def try_dispatch(argv: list[str]) -> int | None:
             result = _BARE[prefix]()
             return result if isinstance(result, int) else 0
         except (StateError, UsageError) as e:
-            sys.stderr.write(f"{e}\n")
+            msg = f"{e}\n"
+            sys.stderr.write(msg)
+            sys.stdout.write(msg)
             return 1
 
     if len(non_help) <= 1 and not has_help:
@@ -526,11 +535,11 @@ def try_dispatch(argv: list[str]) -> int | None:
         close = difflib.get_close_matches(prefix, known, n=3, cutoff=0.5)
         if close:
             hint = ", ".join(close)
-            sys.stderr.write(
-                f"Unknown command: {prefix}. Did you mean: {hint}?\nRun `{argv[0]} --help` for usage.\n"
-            )
+            msg = f"Unknown command: {prefix}. Did you mean: {hint}?\nRun `{argv[0]} --help` for usage.\n"
         else:
-            sys.stderr.write(f"Unknown command: {prefix}\nRun `{argv[0]} --help` for usage.\n")
+            msg = f"Unknown command: {prefix}\nRun `{argv[0]} --help` for usage.\n"
+        sys.stderr.write(msg)
+        sys.stdout.write(msg)
         return 1
 
     return None
