@@ -824,6 +824,103 @@ def test_invoke_repr():
     assert repr(result) == "Result(exit_code=0)"
 
 
+# --- completions ---
+
+
+def test_completions_bash_output_contains_compreply(capsys):
+    @cli("myapp")
+    def status():
+        """check status"""
+
+    result = try_dispatch(["myapp", "completions", "bash"])
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "COMPREPLY" in out
+    assert "myapp" in out
+
+
+def test_completions_zsh_output_contains_compdef(capsys):
+    @cli("myapp")
+    def status():
+        """check status"""
+
+    try_dispatch(["myapp", "completions", "zsh"])
+    out = capsys.readouterr().out
+    assert "compdef" in out
+    assert "myapp" in out
+
+
+def test_completions_fish_output_contains_complete_command(capsys):
+    @cli("myapp")
+    def status():
+        """check status"""
+
+    try_dispatch(["myapp", "completions", "fish"])
+    out = capsys.readouterr().out
+    assert "complete" in out
+    assert "myapp" in out
+
+
+def test_completions_unknown_shell_returns_one(capsys):
+    @cli("myapp")
+    def status():
+        """check status"""
+
+    result = try_dispatch(["myapp", "completions", "powershell"])
+    assert result == 1
+    err = capsys.readouterr().err
+    assert "unknown shell" in err
+
+
+def test_completions_defaults_to_bash_when_no_shell_arg(capsys):
+    @cli("myapp")
+    def status():
+        """check status"""
+
+    try_dispatch(["myapp", "completions"])
+    out = capsys.readouterr().out
+    assert "COMPREPLY" in out
+
+
+# --- __complete ---
+
+
+def test_complete_returns_subcommands(capsys):
+    @cli("myapp")
+    def status():
+        """check status"""
+
+    @cli("myapp")
+    def report():
+        """show report"""
+
+    result = try_dispatch(["myapp", "__complete", "myapp", ""])
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "status" in out
+    assert "report" in out
+
+
+def test_complete_filters_by_prefix(capsys):
+    @cli("myapp")
+    def status():
+        """check status"""
+
+    @cli("myapp")
+    def report():
+        """show report"""
+
+    try_dispatch(["myapp", "__complete", "myapp", "re"])
+    out = capsys.readouterr().out
+    assert "report" in out
+    assert "status" not in out
+
+
+def test_complete_empty_argv_returns_zero():
+    result = try_dispatch(["myapp", "__complete"])
+    assert result == 0
+
+
 def test_autodiscover_strict_discover_on_read_error(tmp_path, monkeypatch):
     pkg_root = tmp_path / "pkg"
     pkg_root.mkdir()
