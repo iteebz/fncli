@@ -284,7 +284,9 @@ def test_usage_error_returns_one(capsys):
         raise UsageError("bad input")
 
     assert dispatch(["fail"]) == 1
-    assert "bad input" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "bad input" in captured.err
+    assert "bad input" in captured.out
 
 
 def test_usage_error_caught_by_run_before_dispatch(capsys, monkeypatch):
@@ -294,7 +296,9 @@ def test_usage_error_caught_by_run_before_dispatch(capsys, monkeypatch):
     with pytest.raises(SystemExit) as exc_info:
         fncli.run(["anything"])
     assert exc_info.value.code == 1
-    assert "pre-dispatch boom" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "pre-dispatch boom" in captured.err
+    assert "pre-dispatch boom" in captured.out
 
 
 # --- invalid args ---
@@ -631,7 +635,9 @@ def test_bare_usage_error(capsys):
 
     bare("myapp", bad)
     assert try_dispatch(["myapp"]) == 1
-    assert "nope" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "nope" in captured.err
+    assert "nope" in captured.out
 
 
 def test_bare_via_dispatch(capsys):
@@ -687,8 +693,8 @@ def test_required_kwarg_rejects_missing(capsys):
         pass
 
     assert dispatch(["propose", "hello"]) != 0
-    err = capsys.readouterr().err
-    assert "--why" in err
+    captured = capsys.readouterr()
+    assert "--why" in captured.out
 
 
 def test_required_kwarg_accepts_when_provided():

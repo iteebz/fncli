@@ -394,10 +394,10 @@ def cli(
                 result = fn(**parsed)
                 sys.exit(result if isinstance(result, int) else 0)
             except StateError as e:
-                sys.stderr.write(f"{e}\n")
+                _emit_error(f"{e}\n")
                 sys.exit(1)
             except UsageError as e:
-                sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
+                _emit_error(f"{e}\nRun `{key} --help` for usage.\n")
                 sys.exit(1)
 
         wrapper.__wrapped__ = fn  # type: ignore[attr-defined]
@@ -426,7 +426,7 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
         result = entry.fn(**parsed)
         return result if isinstance(result, int) else 0
     except StateError as e:
-        sys.stderr.write(f"{e}\n")
+        _emit_error(f"{e}\n")
         return 1
     except UsageError as e:
         _emit_error(f"{e}\nRun `{key} --help` for usage.\n")
@@ -530,7 +530,7 @@ def run(argv: list[str] | None = None) -> None:
     try:
         code = dispatch(argv if argv is not None else sys.argv)
     except (StateError, UsageError) as e:
-        sys.stderr.write(f"{e}\n")
+        _emit_error(f"{e}\n")
         sys.exit(1)
     sys.exit(code)
 
