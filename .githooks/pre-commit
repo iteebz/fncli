@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -e
+
+is_agent() {
+    [ -n "$CLAUDE_CODE" ] || [ -n "$GEMINI_CLI" ] || [ "$AGENT" = "codex" ]
+}
+is_agent || exit 0
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$' || true)
+[ -z "$STAGED" ] && exit 0
+
+uv run ruff format $STAGED
+uv run ruff check --fix $STAGED
+git add $STAGED
+uv run pyright
