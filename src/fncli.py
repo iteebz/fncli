@@ -25,6 +25,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
+_EMPTY = inspect.Parameter.empty
+
 # _REGISTRY: command key → Entry
 # _DEFAULTS: namespace → default command key
 # _BARE:     namespace → bare callback
@@ -60,13 +62,17 @@ class Param:
     name: str  # python parameter name
     clean: str  # display name (trailing _ stripped)
     type: type  # target type for conversion
-    default: Any  # inspect.Parameter.empty if required
+    default: Any  # _EMPTY if required
     is_list: bool  # list[X] annotation
     is_bool: bool  # bool annotation
-    bool_inverted: bool  # default=True → --no-X flag
+    bool_value: bool  # value to set when flag is present (True for --x, False for --no-x)
     flags: list[str]  # e.g. ["--verbose", "-v"] or [] for positionals
     positional: bool  # consumed by position (no -- prefix)
     help: str  # per-param help string
+
+    @property
+    def required(self) -> bool:
+        return self.default is _EMPTY
 
 
 def _unwrap_optional(ann: Any) -> Any:
@@ -85,49 +91,44 @@ def _build_params(
     fn: Callable[..., Any],
     flag_overrides: dict[str, list[str]],
     help_strings: dict[str, str],
+    required_names: set[str],
 ) -> list[Param]:
     params: list[Param] = []
     for pname, param in inspect.signature(fn).parameters.items():
         ann = param.annotation
-        raw = _unwrap_optional(ann) if ann is not inspect.Parameter.empty else str
+        raw = _unwrap_optional(ann) if ann is not _EMPTY else str
         is_list = typing.get_origin(raw) is list
         inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str
-        effective_type = inner if is_list else raw
+        is_bool = raw is bool and not is_list
 
         explicit_flags = flag_overrides.get(pname)
         clean = pname.rstrip("_")
-        no_default = param.default is inspect.Parameter.empty
-        positional_optional = explicit_flags == [] and not no_default
+        no_default = param.default is _EMPTY
+        positional = no_default or explicit_flags == []
 
-        is_bool = raw is bool and not is_list
-        bool_default = param.default if not no_default else False
-        bool_inverted = is_bool and bool_default is True
-
-        if no_default or positional_optional:
-            # Positional parameter
+        # Resolve flags and bool semantics
+        if positional:
             flags: list[str] = []
-            positional = True
-        elif is_bool:
-            if bool_inverted:
-                flags = explicit_flags or [f"--no-{clean.replace('_', '-')}"]
-            else:
-                flags = explicit_flags or [f"--{clean.replace('_', '-')}"]
-            positional = False
+            bool_value = True
+        elif is_bool and param.default is True:
+            flags = explicit_flags or [f"--no-{clean.replace('_', '-')}"]
+            bool_value = False
         else:
             flags = explicit_flags or [f"--{clean.replace('_', '-')}"]
-            positional = False
+            bool_value = True
 
-        default = param.default
+        # required= makes a defaulted param act required at parse time
+        default = _EMPTY if (no_default or pname in required_names) else param.default
 
         params.append(
             Param(
                 name=pname,
                 clean=clean,
-                type=effective_type,
+                type=inner if is_list else raw,
                 default=default,
                 is_list=is_list,
                 is_bool=is_bool,
-                bool_inverted=bool_inverted,
+                bool_value=bool_value,
                 flags=flags,
                 positional=positional,
                 help=help_strings.get(pname, ""),
@@ -139,33 +140,26 @@ def _build_params(
 # --- Parsing ---
 
 
-class _ParseError(Exception):
-    """Internal parse error — converted to UsageError at dispatch boundary."""
-
-
 def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
     """Parse argv against param specs, return kwargs dict."""
     result: dict[str, Any] = {}
     positionals = [p for p in params if p.positional]
-    named = [p for p in params if not p.positional]
-    all_flags = {f: p for p in named for f in p.flags}
+    all_flags = {f: p for p in params if not p.positional for f in p.flags}
     pos_idx = 0
-    consumed: set[int] = set()
 
     i = 0
     while i < len(argv):
         token = argv[i]
 
-        # Flag-style argument
         if token.startswith("-"):
-            # Handle --key=value
+            # --key=value form
             if "=" in token:
                 key, _, value = token.partition("=")
                 param = all_flags.get(key)
                 if param is None:
-                    raise _ParseError(f"unknown flag: {key}")
+                    raise UsageError(f"unknown flag: {key}")
                 if param.is_bool:
-                    raise _ParseError(f"{key} is a flag and does not take a value")
+                    raise UsageError(f"{key} is a flag and does not take a value")
                 if param.is_list:
                     result.setdefault(param.name, []).append(param.type(value))
                 else:
@@ -175,12 +169,14 @@ def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
 
             param = all_flags.get(token)
             if param is None:
-                raise _ParseError(f"unknown flag: {token}")
+                raise UsageError(f"unknown flag: {token}")
+
             if param.is_bool:
-                result[param.name] = not param.bool_inverted
+                result[param.name] = param.bool_value
                 i += 1
                 continue
-            # Named value — consume next token(s)
+
+            # Named value
             if param.is_list:
                 i += 1
                 values: list[Any] = []
@@ -189,55 +185,48 @@ def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
                     i += 1
                 result.setdefault(param.name, []).extend(values)
                 continue
+
             if i + 1 >= len(argv):
-                raise _ParseError(f"{token} requires a value")
+                raise UsageError(f"{token} requires a value")
             try:
                 result[param.name] = param.type(argv[i + 1])
             except (ValueError, TypeError) as e:
-                raise _ParseError(f"{token}: {e}") from None
+                raise UsageError(f"{token}: {e}") from None
             i += 2
             continue
 
         # Positional argument
-        if pos_idx < len(positionals):
-            p = positionals[pos_idx]
-            if p.is_list:
-                # Greedy: consume all remaining non-flag tokens
-                values = []
-                while i < len(argv) and not argv[i].startswith("-"):
-                    try:
-                        values.append(p.type(argv[i]))
-                    except (ValueError, TypeError) as e:
-                        raise _ParseError(f"{p.clean}: {e}") from None
-                    consumed.add(i)
-                    i += 1
-                if p.name in result:
-                    result[p.name].extend(values)
-                else:
-                    result[p.name] = values
-                pos_idx += 1
-                continue
-            try:
-                result[p.name] = p.type(token)
-            except (ValueError, TypeError) as e:
-                raise _ParseError(f"{p.clean}: {e}") from None
-            consumed.add(i)
+        if pos_idx >= len(positionals):
+            raise UsageError(f"unexpected argument: {token}")
+
+        p = positionals[pos_idx]
+        if p.is_list:
+            values = []
+            while i < len(argv) and not argv[i].startswith("-"):
+                try:
+                    values.append(p.type(argv[i]))
+                except (ValueError, TypeError) as e:
+                    raise UsageError(f"{p.clean}: {e}") from None
+                i += 1
+            result[p.name] = result.get(p.name, []) + values
             pos_idx += 1
-            i += 1
             continue
 
-        raise _ParseError(f"unexpected argument: {token}")
+        try:
+            result[p.name] = p.type(token)
+        except (ValueError, TypeError) as e:
+            raise UsageError(f"{p.clean}: {e}") from None
+        pos_idx += 1
+        i += 1
 
     # Fill defaults, check required
     for p in params:
         if p.name in result:
             continue
-        if p.default is not inspect.Parameter.empty:
-            result[p.name] = p.default
-        elif (p.positional and p.is_list) or p.positional:
-            raise _ParseError(f"<{p.clean}> required")
-        else:
-            raise _ParseError(f"{p.flags[0]} is required")
+        if p.required:
+            label = f"<{p.clean}>" if p.positional else p.flags[0]
+            raise UsageError(f"{label} is required")
+        result[p.name] = p.default
 
     return result
 
@@ -254,61 +243,47 @@ def _format_help(key: str, description: str, params: list[Param]) -> str:
     for p in params:
         if p.positional:
             if p.is_list:
-                if p.default is inspect.Parameter.empty:
-                    usage_parts.append(f"<{p.clean}> [<{p.clean}> ...]")
-                else:
-                    usage_parts.append(f"[<{p.clean}> ...]")
-            elif p.default is not inspect.Parameter.empty:
-                usage_parts.append(f"[{p.clean}]")
+                token = f"<{p.clean}> [<{p.clean}> ...]" if p.required else f"[<{p.clean}> ...]"
+            elif p.required:
+                token = f"<{p.clean}>"
             else:
-                usage_parts.append(f"<{p.clean}>")
+                token = f"[{p.clean}]"
+            usage_parts.append(token)
+        elif p.is_bool:
+            usage_parts.append(f"[{p.flags[0]}]")
         else:
-            if p.is_bool:
-                usage_parts.append(f"[{p.flags[0]}]")
-            else:
-                metavar = p.clean.upper()
-                usage_parts.append(f"[{p.flags[0]} {metavar}]")
+            usage_parts.append(f"[{p.flags[0]} {p.clean.upper()}]")
     lines.append(f"usage: {' '.join(usage_parts)}")
 
     if description:
         lines.append(f"\n{description}")
 
-    # Separate positionals and options
     positional_params = [p for p in params if p.positional]
     option_params = [p for p in params if not p.positional]
 
     if positional_params:
         lines.append("\npositional arguments:")
-        for p in positional_params:
-            help_str = f"  {p.clean}"
-            if p.help:
-                help_str += f"  {p.help}"
-            lines.append(help_str)
+        lines.extend(
+            f"  {p.clean}  {p.help}" if p.help else f"  {p.clean}" for p in positional_params
+        )
 
-    if option_params:
-        lines.append("\noptions:")
-        lines.append("  -h, --help  show this help message and exit")
-        for p in option_params:
-            if p.is_bool:
-                flag_str = ", ".join(p.flags)
-                help_str = f"  {flag_str}"
-            else:
-                metavar = p.clean.upper()
-                flag_str = ", ".join(f"{f} {metavar}" for f in p.flags)
-                help_str = f"  {flag_str}"
-            if p.help:
-                help_str += f"  {p.help}"
-            elif p.default is not inspect.Parameter.empty and not p.is_bool:
-                help_str += f"  (default: {p.default})"
-            lines.append(help_str)
-    else:
-        lines.append("\noptions:")
-        lines.append("  -h, --help  show this help message and exit")
+    lines.append("\noptions:")
+    lines.append("  -h, --help  show this help message and exit")
+    for p in option_params:
+        if p.is_bool:
+            flag_str = ", ".join(p.flags)
+        else:
+            metavar = p.clean.upper()
+            flag_str = ", ".join(f"{f} {metavar}" for f in p.flags)
+        suffix = f"  {p.help}" if p.help else ""
+        if not suffix and not p.required and not p.is_bool:
+            suffix = f"  (default: {p.default})"
+        lines.append(f"  {flag_str}{suffix}")
 
     return "\n".join(lines) + "\n"
 
 
-# --- Registry entry ---
+# --- Registry ---
 
 
 @dataclasses.dataclass(slots=True)
@@ -317,7 +292,6 @@ class Entry:
     params: list[Param]
     description: str
     meta: dict[str, Any]
-    required_names: set[str]  # params that must be provided even with defaults
 
 
 def _strict_discover() -> bool:
@@ -391,20 +365,13 @@ def cli(
             raise RegistrationError(f"command name {_name!r} is reserved")
 
         desc = description or fn.__doc__ or ""
-        required_set = set(required or [])
-        params = _build_params(fn, flags or {}, help or {})
+        params = _build_params(fn, flags or {}, help or {}, set(required or []))
 
         merged = dict(meta or {})
         if readonly:
             merged["readonly"] = True
 
-        entry = Entry(
-            fn=fn,
-            params=params,
-            description=desc,
-            meta=merged,
-            required_names=required_set,
-        )
+        entry = Entry(fn=fn, params=params, description=desc, meta=merged)
         _REGISTRY[key] = entry
         for a in aliases or []:
             if a in RESERVED:
@@ -424,12 +391,8 @@ def cli(
                 sys.exit(0)
             try:
                 parsed = _parse(params, argv)
-                _enforce_required(parsed, params, required_set)
                 result = fn(**parsed)
                 sys.exit(result if isinstance(result, int) else 0)
-            except _ParseError as e:
-                sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
-                sys.exit(1)
             except StateError as e:
                 sys.stderr.write(f"{e}\n")
                 sys.exit(1)
@@ -441,16 +404,6 @@ def cli(
         return wrapper
 
     return decorator
-
-
-def _enforce_required(
-    parsed: dict[str, Any], params: list[Param], required_names: set[str]
-) -> None:
-    """Check that params in the required= set were actually provided (not just defaulted)."""
-    for p in params:
-        if p.name in required_names and parsed.get(p.name) is p.default:
-            flag = p.flags[0] if p.flags else p.clean
-            raise _ParseError(f"{flag} is required")
 
 
 # --- Dispatch ---
@@ -465,8 +418,7 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
 
     try:
         parsed = _parse(entry.params, argv)
-        _enforce_required(parsed, entry.params, entry.required_names)
-    except _ParseError as e:
+    except UsageError as e:
         _emit_error(f"{key}: {e}\nRun `{key} --help` for usage.\n")
         return 1
 
@@ -513,7 +465,6 @@ def try_dispatch(argv: list[str]) -> int | None:
         key = " ".join(argv[:depth])
         remaining = argv[depth:]
 
-        # Skip if the next token is a deeper subcommand
         if (
             remaining
             and not remaining[0].startswith("-")
@@ -677,17 +628,12 @@ def manifest() -> dict[str, Any]:
     for key, entry in sorted(_REGISTRY.items()):
         params: list[dict[str, Any]] = []
         for p in entry.params:
-            if p.is_bool:
-                kind = "flag"
-            elif p.positional:
-                kind = "positional"
-            else:
-                kind = "option"
+            kind = "flag" if p.is_bool else ("positional" if p.positional else "option")
             param_entry: dict[str, Any] = {
                 "name": p.name,
                 "type": kind,
-                "required": p.default is inspect.Parameter.empty or p.name in entry.required_names,
-                "default": None if p.default is inspect.Parameter.empty else p.default,
+                "required": p.required,
+                "default": None if p.required else p.default,
                 "help": p.help,
             }
             if p.flags:
@@ -714,7 +660,6 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
 
         result_entry: dict[str, str] = {"command": key, "help": "skip", "live": "skip"}
 
-        # Test help generation
         try:
             _format_help(key, _REGISTRY[key].description, params)
             result_entry["help"] = "pass"
@@ -723,7 +668,7 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
 
         if live and readonly(key):
             sig = inspect.signature(fn)
-            if not any(p.default is inspect.Parameter.empty for p in sig.parameters.values()):
+            if not any(p.default is _EMPTY for p in sig.parameters.values()):
                 try:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         ret = fn()
@@ -804,7 +749,6 @@ def _complete(argv: list[str]) -> int:
             if token:
                 emit(token)
 
-    # Flags for the matched command
     if cmd_key and cmd_key in _REGISTRY:
         for p in _REGISTRY[cmd_key].params:
             for flag in p.flags:
