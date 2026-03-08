@@ -305,7 +305,7 @@ def _assert_key_available(key: str, fn: Callable[..., Any]) -> None:
         raise RegistrationError(f"command key {key!r} already registered")
 
 
-def _emit_error(msg: str) -> None:
+def emit_error(msg: str) -> None:
     """Write error to both stderr and stdout (agents read stdout)."""
     sys.stderr.write(msg)
     sys.stdout.write(msg)
@@ -394,10 +394,10 @@ def cli(
                 result = fn(**parsed)
                 sys.exit(result if isinstance(result, int) else 0)
             except StateError as e:
-                _emit_error(f"{e}\n")
+                emit_error(f"{e}\n")
                 sys.exit(1)
             except UsageError as e:
-                _emit_error(f"{e}\nRun `{key} --help` for usage.\n")
+                emit_error(f"{e}\nRun `{key} --help` for usage.\n")
                 sys.exit(1)
 
         wrapper.__wrapped__ = fn  # type: ignore[attr-defined]
@@ -419,17 +419,17 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
     try:
         parsed = _parse(entry.params, argv)
     except UsageError as e:
-        _emit_error(f"{key}: {e}\nRun `{key} --help` for usage.\n")
+        emit_error(f"{key}: {e}\nRun `{key} --help` for usage.\n")
         return 1
 
     try:
         result = entry.fn(**parsed)
         return result if isinstance(result, int) else 0
     except StateError as e:
-        _emit_error(f"{e}\n")
+        emit_error(f"{e}\n")
         return 1
     except UsageError as e:
-        _emit_error(f"{e}\nRun `{key} --help` for usage.\n")
+        emit_error(f"{e}\nRun `{key} --help` for usage.\n")
         return 1
 
 
@@ -491,7 +491,7 @@ def try_dispatch(argv: list[str]) -> int | None:
             result = _BARE[prefix]()
             return result if isinstance(result, int) else 0
         except (StateError, UsageError) as e:
-            _emit_error(f"{e}\n")
+            emit_error(f"{e}\n")
             return 1
 
     if len(non_help) <= 1 and not has_help:
@@ -510,7 +510,7 @@ def try_dispatch(argv: list[str]) -> int | None:
     if non_help:
         close = difflib.get_close_matches(prefix, list(_REGISTRY), n=3, cutoff=0.5)
         hint = f" Did you mean: {', '.join(close)}?" if close else ""
-        _emit_error(f"Unknown command: {prefix}.{hint}\nRun `{argv[0]} --help` for usage.\n")
+        emit_error(f"Unknown command: {prefix}.{hint}\nRun `{argv[0]} --help` for usage.\n")
         return 1
 
     return None
@@ -530,7 +530,7 @@ def run(argv: list[str] | None = None) -> None:
     try:
         code = dispatch(argv if argv is not None else sys.argv)
     except (StateError, UsageError) as e:
-        _emit_error(f"{e}\n")
+        emit_error(f"{e}\n")
         sys.exit(1)
     sys.exit(code)
 
