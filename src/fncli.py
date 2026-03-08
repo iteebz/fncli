@@ -7,10 +7,10 @@
         \"\"\"show status\"\"\"
         ...
 
-The function IS the interface. Signature → argparse. Docstring → help.
+The function IS the interface. Signature → parser. Docstring → help.
 """
 
-import argparse
+import dataclasses
 import difflib
 import importlib
 import inspect
@@ -25,10 +25,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
-# _REGISTRY: command key → {fn, parser, meta}
+# _REGISTRY: command key → Entry
 # _DEFAULTS: namespace → default command key
 # _BARE:     namespace → bare callback
-_REGISTRY: dict[str, dict[str, Any]] = {}
+_REGISTRY: dict[str, "Entry"] = {}
 _DEFAULTS: dict[str, str] = {}
 _BARE: dict[str, Callable[..., Any]] = {}
 
@@ -52,15 +52,21 @@ class RegistrationError(Exception):
     pass
 
 
-def _strict_discover() -> bool:
-    value = os.environ.get("FNCLI_STRICT_DISCOVER", "")
-    return value.lower() not in {"", "0", "false", "no", "off"}
+# --- Parameter model ---
 
 
-def _assert_key_available(key: str, fn: Callable[..., Any]) -> None:
-    existing = _REGISTRY.get(key)
-    if existing and existing["fn"] is not fn:
-        raise RegistrationError(f"command key {key!r} already registered")
+@dataclasses.dataclass(frozen=True, slots=True)
+class Param:
+    name: str  # python parameter name
+    clean: str  # display name (trailing _ stripped)
+    type: type  # target type for conversion
+    default: Any  # inspect.Parameter.empty if required
+    is_list: bool  # list[X] annotation
+    is_bool: bool  # bool annotation
+    bool_inverted: bool  # default=True → --no-X flag
+    flags: list[str]  # e.g. ["--verbose", "-v"] or [] for positionals
+    positional: bool  # consumed by position (no -- prefix)
+    help: str  # per-param help string
 
 
 def _unwrap_optional(ann: Any) -> Any:
@@ -75,19 +81,254 @@ def _unwrap_optional(ann: Any) -> Any:
     return ann if callable(ann) else str
 
 
-def _required_positionals(fn: Callable[..., Any]) -> list[str]:
-    """Return names of required list-type positional params — used for early error messaging."""
-    return [
-        pname
-        for pname, param in inspect.signature(fn).parameters.items()
-        if typing.get_origin(
-            _unwrap_optional(
-                param.annotation if param.annotation is not inspect.Parameter.empty else str
+def _build_params(
+    fn: Callable[..., Any],
+    flag_overrides: dict[str, list[str]],
+    help_strings: dict[str, str],
+) -> list[Param]:
+    params: list[Param] = []
+    for pname, param in inspect.signature(fn).parameters.items():
+        ann = param.annotation
+        raw = _unwrap_optional(ann) if ann is not inspect.Parameter.empty else str
+        is_list = typing.get_origin(raw) is list
+        inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str
+        effective_type = inner if is_list else raw
+
+        explicit_flags = flag_overrides.get(pname)
+        clean = pname.rstrip("_")
+        no_default = param.default is inspect.Parameter.empty
+        positional_optional = explicit_flags == [] and not no_default
+
+        is_bool = raw is bool and not is_list
+        bool_default = param.default if not no_default else False
+        bool_inverted = is_bool and bool_default is True
+
+        if no_default or positional_optional:
+            # Positional parameter
+            flags: list[str] = []
+            positional = True
+        elif is_bool:
+            if bool_inverted:
+                flags = explicit_flags or [f"--no-{clean.replace('_', '-')}"]
+            else:
+                flags = explicit_flags or [f"--{clean.replace('_', '-')}"]
+            positional = False
+        else:
+            flags = explicit_flags or [f"--{clean.replace('_', '-')}"]
+            positional = False
+
+        default = param.default
+
+        params.append(
+            Param(
+                name=pname,
+                clean=clean,
+                type=effective_type,
+                default=default,
+                is_list=is_list,
+                is_bool=is_bool,
+                bool_inverted=bool_inverted,
+                flags=flags,
+                positional=positional,
+                help=help_strings.get(pname, ""),
             )
         )
-        is list
-        and param.default is inspect.Parameter.empty
-    ]
+    return params
+
+
+# --- Parsing ---
+
+
+class _ParseError(Exception):
+    """Internal parse error — converted to UsageError at dispatch boundary."""
+
+
+def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
+    """Parse argv against param specs, return kwargs dict."""
+    result: dict[str, Any] = {}
+    positionals = [p for p in params if p.positional]
+    named = [p for p in params if not p.positional]
+    all_flags = {f: p for p in named for f in p.flags}
+    pos_idx = 0
+    consumed: set[int] = set()
+
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+
+        # Flag-style argument
+        if token.startswith("-"):
+            # Handle --key=value
+            if "=" in token:
+                key, _, value = token.partition("=")
+                param = all_flags.get(key)
+                if param is None:
+                    raise _ParseError(f"unknown flag: {key}")
+                if param.is_bool:
+                    raise _ParseError(f"{key} is a flag and does not take a value")
+                if param.is_list:
+                    result.setdefault(param.name, []).append(param.type(value))
+                else:
+                    result[param.name] = param.type(value)
+                i += 1
+                continue
+
+            param = all_flags.get(token)
+            if param is None:
+                raise _ParseError(f"unknown flag: {token}")
+            if param.is_bool:
+                result[param.name] = not param.bool_inverted
+                i += 1
+                continue
+            # Named value — consume next token(s)
+            if param.is_list:
+                i += 1
+                values: list[Any] = []
+                while i < len(argv) and not argv[i].startswith("-"):
+                    values.append(param.type(argv[i]))
+                    i += 1
+                result.setdefault(param.name, []).extend(values)
+                continue
+            if i + 1 >= len(argv):
+                raise _ParseError(f"{token} requires a value")
+            try:
+                result[param.name] = param.type(argv[i + 1])
+            except (ValueError, TypeError) as e:
+                raise _ParseError(f"{token}: {e}") from None
+            i += 2
+            continue
+
+        # Positional argument
+        if pos_idx < len(positionals):
+            p = positionals[pos_idx]
+            if p.is_list:
+                # Greedy: consume all remaining non-flag tokens
+                values = []
+                while i < len(argv) and not argv[i].startswith("-"):
+                    try:
+                        values.append(p.type(argv[i]))
+                    except (ValueError, TypeError) as e:
+                        raise _ParseError(f"{p.clean}: {e}") from None
+                    consumed.add(i)
+                    i += 1
+                if p.name in result:
+                    result[p.name].extend(values)
+                else:
+                    result[p.name] = values
+                pos_idx += 1
+                continue
+            try:
+                result[p.name] = p.type(token)
+            except (ValueError, TypeError) as e:
+                raise _ParseError(f"{p.clean}: {e}") from None
+            consumed.add(i)
+            pos_idx += 1
+            i += 1
+            continue
+
+        raise _ParseError(f"unexpected argument: {token}")
+
+    # Fill defaults, check required
+    for p in params:
+        if p.name in result:
+            continue
+        if p.default is not inspect.Parameter.empty:
+            result[p.name] = p.default
+        elif (p.positional and p.is_list) or p.positional:
+            raise _ParseError(f"<{p.clean}> required")
+        else:
+            raise _ParseError(f"{p.flags[0]} is required")
+
+    return result
+
+
+# --- Help formatting ---
+
+
+def _format_help(key: str, description: str, params: list[Param]) -> str:
+    """Generate help text for a single command."""
+    lines: list[str] = []
+
+    # Usage line
+    usage_parts = [key]
+    for p in params:
+        if p.positional:
+            if p.is_list:
+                if p.default is inspect.Parameter.empty:
+                    usage_parts.append(f"<{p.clean}> [<{p.clean}> ...]")
+                else:
+                    usage_parts.append(f"[<{p.clean}> ...]")
+            elif p.default is not inspect.Parameter.empty:
+                usage_parts.append(f"[{p.clean}]")
+            else:
+                usage_parts.append(f"<{p.clean}>")
+        else:
+            if p.is_bool:
+                usage_parts.append(f"[{p.flags[0]}]")
+            else:
+                metavar = p.clean.upper()
+                usage_parts.append(f"[{p.flags[0]} {metavar}]")
+    lines.append(f"usage: {' '.join(usage_parts)}")
+
+    if description:
+        lines.append(f"\n{description}")
+
+    # Separate positionals and options
+    positional_params = [p for p in params if p.positional]
+    option_params = [p for p in params if not p.positional]
+
+    if positional_params:
+        lines.append("\npositional arguments:")
+        for p in positional_params:
+            help_str = f"  {p.clean}"
+            if p.help:
+                help_str += f"  {p.help}"
+            lines.append(help_str)
+
+    if option_params:
+        lines.append("\noptions:")
+        lines.append("  -h, --help  show this help message and exit")
+        for p in option_params:
+            if p.is_bool:
+                flag_str = ", ".join(p.flags)
+                help_str = f"  {flag_str}"
+            else:
+                metavar = p.clean.upper()
+                flag_str = ", ".join(f"{f} {metavar}" for f in p.flags)
+                help_str = f"  {flag_str}"
+            if p.help:
+                help_str += f"  {p.help}"
+            elif p.default is not inspect.Parameter.empty and not p.is_bool:
+                help_str += f"  (default: {p.default})"
+            lines.append(help_str)
+    else:
+        lines.append("\noptions:")
+        lines.append("  -h, --help  show this help message and exit")
+
+    return "\n".join(lines) + "\n"
+
+
+# --- Registry entry ---
+
+
+@dataclasses.dataclass(slots=True)
+class Entry:
+    fn: Callable[..., Any]
+    params: list[Param]
+    description: str
+    meta: dict[str, Any]
+    required_names: set[str]  # params that must be provided even with defaults
+
+
+def _strict_discover() -> bool:
+    value = os.environ.get("FNCLI_STRICT_DISCOVER", "")
+    return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+def _assert_key_available(key: str, fn: Callable[..., Any]) -> None:
+    existing = _REGISTRY.get(key)
+    if existing and existing.fn is not fn:
+        raise RegistrationError(f"command key {key!r} already registered")
 
 
 def _emit_error(msg: str) -> None:
@@ -97,7 +338,6 @@ def _emit_error(msg: str) -> None:
 
 
 def _print_command_list(prefix: str, matches: list[tuple[str, str]]) -> None:
-    """Format and print a command list with aligned descriptions."""
     lines = _collapse_commands(prefix, matches)
     col = max((len(cmd) for cmd, _ in lines), default=0)
     sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
@@ -121,76 +361,6 @@ def _collapse_commands(prefix: str, matches: list[tuple[str, str]]) -> list[tupl
         else:
             lines.append((token, desc))
     return lines
-
-
-def _add_param(
-    parser: argparse.ArgumentParser,
-    pname: str,
-    param: inspect.Parameter,
-    flag_overrides: dict[str, list[str]],
-    help_strings: dict[str, str],
-    required_set: set[str],
-) -> None:
-    """Add a single function parameter to the argparse parser."""
-    ann = param.annotation
-    raw = _unwrap_optional(ann) if ann is not inspect.Parameter.empty else str
-    is_list = typing.get_origin(raw) is list
-    inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str
-    explicit_flags = flag_overrides.get(pname)
-    clean = pname.rstrip("_")
-    flag_names = explicit_flags or [f"--{clean.replace('_', '-')}"]
-    no_default = param.default is inspect.Parameter.empty
-    positional_optional = explicit_flags == [] and not no_default
-    param_help = help_strings.get(pname)
-
-    # Positional (no default) — required arg consumed by position
-    if no_default:
-        if is_list:
-            parser.add_argument(pname, type=inner, nargs="+", help=param_help)
-        else:
-            parser.add_argument(pname, type=raw, help=param_help)
-        return
-
-    # Positional-optional (flags=[]) — consumed by position, not required
-    if positional_optional:
-        nargs = "*" if is_list else "?"
-        parser.add_argument(
-            pname,
-            type=inner if is_list else raw,
-            nargs=nargs,
-            default=param.default,
-            help=param_help,
-        )
-        return
-
-    # Bool flag
-    if raw is bool:
-        bool_default = param.default if param.default is not inspect.Parameter.empty else False
-        if bool_default is True:
-            no_flags = [f"--no-{n[2:]}" if n.startswith("--") else n for n in flag_names]
-            parser.add_argument(
-                *no_flags, dest=pname, action="store_false", default=True, help=param_help
-            )
-        else:
-            parser.add_argument(
-                *flag_names, dest=pname, action="store_true", default=False, help=param_help
-            )
-        return
-
-    # Named flag (--name value)
-    kwargs: dict[str, Any] = {
-        "dest": pname,
-        "type": inner if is_list else raw,
-        "default": param.default,
-        "help": param_help,
-    }
-    if is_list:
-        kwargs["nargs"] = "*"
-    else:
-        kwargs["required"] = pname in required_set
-    if clean != pname:
-        kwargs["metavar"] = clean.upper()
-    parser.add_argument(*flag_names, **kwargs)
 
 
 # --- Registration ---
@@ -221,20 +391,20 @@ def cli(
             raise RegistrationError(f"command name {_name!r} is reserved")
 
         desc = description or fn.__doc__ or ""
-        parser = argparse.ArgumentParser(prog=key, description=desc, add_help=True)
-        for pname, param in inspect.signature(fn).parameters.items():
-            _add_param(parser, pname, param, flags or {}, help or {}, set(required or []))
+        required_set = set(required or [])
+        params = _build_params(fn, flags or {}, help or {})
 
         merged = dict(meta or {})
         if readonly:
             merged["readonly"] = True
 
-        entry: dict[str, Any] = {
-            "fn": fn,
-            "parser": parser,
-            "meta": merged,
-            "required_positionals": _required_positionals(fn),
-        }
+        entry = Entry(
+            fn=fn,
+            params=params,
+            description=desc,
+            meta=merged,
+            required_names=required_set,
+        )
         _REGISTRY[key] = entry
         for a in aliases or []:
             if a in RESERVED:
@@ -248,18 +418,18 @@ def cli(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if args or kwargs:
                 return fn(*args, **kwargs)
-            stderr_buf = io.StringIO()
+            argv = sys.argv[1:]
+            if _HELP_FLAGS & set(argv):
+                sys.stdout.write(_format_help(key, desc, params))
+                sys.exit(0)
             try:
-                with redirect_stderr(stderr_buf):
-                    parsed = parser.parse_args(sys.argv[1:])
-            except SystemExit as e:
-                stderr_out = stderr_buf.getvalue()
-                if stderr_out:
-                    sys.stderr.write(stderr_out)
-                sys.exit(e.code)
-            try:
-                result = fn(**vars(parsed))
+                parsed = _parse(params, argv)
+                _enforce_required(parsed, params, required_set)
+                result = fn(**parsed)
                 sys.exit(result if isinstance(result, int) else 0)
+            except _ParseError as e:
+                sys.stderr.write(f"{e}\nRun `{key} --help` for usage.\n")
+                sys.exit(1)
             except StateError as e:
                 sys.stderr.write(f"{e}\n")
                 sys.exit(1)
@@ -273,31 +443,35 @@ def cli(
     return decorator
 
 
+def _enforce_required(
+    parsed: dict[str, Any], params: list[Param], required_names: set[str]
+) -> None:
+    """Check that params in the required= set were actually provided (not just defaulted)."""
+    for p in params:
+        if p.name in required_names and parsed.get(p.name) is p.default:
+            flag = p.flags[0] if p.flags else p.clean
+            raise _ParseError(f"{flag} is required")
+
+
 # --- Dispatch ---
 
 
 def _dispatch_one(key: str, argv: list[str]) -> int:
     entry = _REGISTRY[key]
-    fn, parser = entry["fn"], entry["parser"]
-    req = entry["required_positionals"]
-    if req and not any(a for a in argv if not a.startswith("-")) and not (_HELP_FLAGS & set(argv)):
-        names = ", ".join(f"<{n}>" for n in req)
-        _emit_error(f"{key}: {names} required. Run `{key} --help` for usage.\n")
+
+    if _HELP_FLAGS & set(argv):
+        sys.stdout.write(_format_help(key, entry.description, entry.params))
+        return 0
+
+    try:
+        parsed = _parse(entry.params, argv)
+        _enforce_required(parsed, entry.params, entry.required_names)
+    except _ParseError as e:
+        _emit_error(f"{key}: {e}\nRun `{key} --help` for usage.\n")
         return 1
-    stderr_buf = io.StringIO()
+
     try:
-        with redirect_stderr(stderr_buf):
-            args = parser.parse_args(argv)
-    except SystemExit as e:
-        code = int(e.code) if e.code is not None else 1
-        stderr_out = stderr_buf.getvalue()
-        if stderr_out:
-            _emit_error(stderr_out)
-        elif code != 0:
-            _emit_error(f"{key}: invalid arguments. Run `{key} --help`.\n")
-        return code
-    try:
-        result = fn(**vars(args))
+        result = entry.fn(**parsed)
         return result if isinstance(result, int) else 0
     except StateError as e:
         sys.stderr.write(f"{e}\n")
@@ -315,7 +489,7 @@ def _subcommand_matches(prefix: str, token: str) -> bool:
 def _show_namespace(prefix: str, argv: list[str]) -> int | None:
     has_help = bool(_HELP_FLAGS & set(argv))
     matches = sorted(
-        (key, entry["parser"].description or "")
+        (key, entry.description)
         for key, entry in _REGISTRY.items()
         if key.startswith(prefix + " ") and key != prefix
     )
@@ -374,7 +548,7 @@ def try_dispatch(argv: list[str]) -> int | None:
 
     # Namespace help or fuzzy match
     matches = sorted(
-        (key, entry["parser"].description or "")
+        (key, entry.description)
         for key, entry in _REGISTRY.items()
         if key.startswith(prefix + " ") or key == prefix
     )
@@ -396,7 +570,7 @@ def dispatch(argv: list[str]) -> int:
     if result is not None:
         return result
     prog = argv[0] if argv else "app"
-    all_keys = sorted((k, e["parser"].description or "") for k, e in _REGISTRY.items())
+    all_keys = sorted((k, e.description) for k, e in _REGISTRY.items())
     _print_command_list(prog, [(f"{prog} {k}", desc) for k, desc in all_keys])
     return 1
 
@@ -456,7 +630,7 @@ def alias(src: str, dst: str) -> None:
 def alias_namespace(src: str, dst: str) -> None:
     """Register all commands under `src` namespace also under `dst`."""
     prefix = src + " "
-    updates: dict[str, dict[str, Any]] = {}
+    updates: dict[str, Entry] = {}
     for key, entry in list(_REGISTRY.items()):
         if not key.startswith(prefix):
             continue
@@ -476,53 +650,53 @@ def commands() -> list[str]:
 
 
 def readonly(key: str) -> bool:
-    return _REGISTRY.get(key, {}).get("meta", {}).get("readonly", False)
+    entry = _REGISTRY.get(key)
+    return entry.meta.get("readonly", False) if entry else False
 
 
 def meta(key: str) -> dict[str, Any]:
-    return _REGISTRY.get(key, {}).get("meta", {})
+    entry = _REGISTRY.get(key)
+    return entry.meta if entry else {}
 
 
 def where(**kwargs: Any) -> list[str]:
     return sorted(
         k
-        for k in _REGISTRY
-        if all(_REGISTRY[k]["meta"].get(field) == value for field, value in kwargs.items())
+        for k, entry in _REGISTRY.items()
+        if all(entry.meta.get(field) == value for field, value in kwargs.items())
     )
 
 
-def entries() -> list[tuple[str, Callable[..., Any], argparse.ArgumentParser]]:
-    return [(key, e["fn"], e["parser"]) for key, e in sorted(_REGISTRY.items())]
+def entries() -> list[tuple[str, Callable[..., Any], list[Param]]]:
+    return [(key, e.fn, e.params) for key, e in sorted(_REGISTRY.items())]
 
 
 def manifest() -> dict[str, Any]:
     """Structured description of all registered commands, for agent consumption."""
     result: dict[str, Any] = {}
-    for key, _, parser in entries():
+    for key, entry in sorted(_REGISTRY.items()):
         params: list[dict[str, Any]] = []
-        for action in parser._actions:
-            if isinstance(action, argparse._HelpAction):  # type: ignore[reportPrivateUsage]
-                continue
-            if action.option_strings:
-                kind = "flag" if isinstance(action, argparse._StoreTrueAction) else "option"  # type: ignore[reportPrivateUsage]
-            else:
+        for p in entry.params:
+            if p.is_bool:
+                kind = "flag"
+            elif p.positional:
                 kind = "positional"
-            entry: dict[str, Any] = {
-                "name": action.dest,
+            else:
+                kind = "option"
+            param_entry: dict[str, Any] = {
+                "name": p.name,
                 "type": kind,
-                "required": action.required
-                if hasattr(action, "required")
-                else not action.option_strings,
-                "default": None if action.default is argparse.SUPPRESS else action.default,
-                "help": action.help or "",
+                "required": p.default is inspect.Parameter.empty or p.name in entry.required_names,
+                "default": None if p.default is inspect.Parameter.empty else p.default,
+                "help": p.help,
             }
-            if action.option_strings:
-                entry["flags"] = action.option_strings
-            params.append(entry)
+            if p.flags:
+                param_entry["flags"] = p.flags
+            params.append(param_entry)
         result[key] = {
-            "description": parser.description or "",
+            "description": entry.description,
             "params": params,
-            "meta": _REGISTRY[key]["meta"],
+            "meta": entry.meta,
         }
     return result
 
@@ -534,19 +708,18 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
     prefix = prog + " "
     results: list[dict[str, str]] = []
 
-    for key, fn, parser in entries():
+    for key, fn, params in entries():
         if key != prog and not key.startswith(prefix):
             continue
 
-        result: dict[str, str] = {"command": key, "help": "skip", "live": "skip"}
+        result_entry: dict[str, str] = {"command": key, "help": "skip", "live": "skip"}
 
+        # Test help generation
         try:
-            with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
-                parser.parse_args(["--help"])
-        except SystemExit as e:
-            result["help"] = "pass" if e.code == 0 else "FAIL"
+            _format_help(key, _REGISTRY[key].description, params)
+            result_entry["help"] = "pass"
         except Exception:
-            result["help"] = "FAIL"
+            result_entry["help"] = "FAIL"
 
         if live and readonly(key):
             sig = inspect.signature(fn)
@@ -554,14 +727,16 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
                 try:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         ret = fn()
-                    result["live"] = "pass" if (ret is None or ret == 0) else f"FAIL(rc={ret})"
+                    result_entry["live"] = (
+                        "pass" if (ret is None or ret == 0) else f"FAIL(rc={ret})"
+                    )
                 except SystemExit as e:
-                    result["live"] = "pass" if e.code == 0 else f"FAIL(exit={e.code})"
+                    result_entry["live"] = "pass" if e.code == 0 else f"FAIL(exit={e.code})"
                 except Exception as e:
-                    result["live"] = f"FAIL({type(e).__name__})"
+                    result_entry["live"] = f"FAIL({type(e).__name__})"
                     traceback.print_exc(file=sys.stderr)
 
-        results.append(result)
+        results.append(result_entry)
 
     if not results:
         sys.stderr.write(f"{prog} selftest: no commands registered\n")
@@ -598,7 +773,7 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
 
 def _complete(argv: list[str]) -> int:
     """Handle `prog __complete word1 word2 ...` — outputs one candidate per line."""
-    words = argv[2:]  # COMP_WORDS passed by shell
+    words = argv[2:]
     if not words:
         return 0
     prog = words[0]
@@ -606,10 +781,8 @@ def _complete(argv: list[str]) -> int:
     cur = typed[-1] if typed else ""
     preceding = typed[:-1]
 
-    # Build command key from non-flag preceding tokens
     cmd_parts = [prog] + [p for p in preceding if not p.startswith("-")]
 
-    # Find deepest matching command key
     cmd_key: str | None = None
     for depth in range(len(cmd_parts), 0, -1):
         candidate = " ".join(cmd_parts[:depth])
@@ -624,7 +797,6 @@ def _complete(argv: list[str]) -> int:
             sys.stdout.write(s + "\n")
             seen.add(s)
 
-    # Subcommands at current depth
     search_prefix = (cmd_key + " ") if cmd_key else (prog + " ")
     for key in _REGISTRY:
         if key.startswith(search_prefix):
@@ -634,11 +806,8 @@ def _complete(argv: list[str]) -> int:
 
     # Flags for the matched command
     if cmd_key and cmd_key in _REGISTRY:
-        parser = _REGISTRY[cmd_key]["parser"]
-        for action in parser._actions:
-            if isinstance(action, argparse._HelpAction):  # type: ignore[reportPrivateUsage]
-                continue
-            for flag in action.option_strings:
+        for p in _REGISTRY[cmd_key].params:
+            for flag in p.flags:
                 emit(flag)
 
     return 0
