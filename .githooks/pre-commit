@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-# Enforce for everyone — commit quality isn't agent-specific
+# Block commits that would delete 50+ files
+DELETED=$(git diff --cached --name-only --diff-filter=D | wc -l | tr -d ' ')
+if [ "$DELETED" -ge 50 ]; then
+    echo "pre-commit: refusing commit — $DELETED staged deletions (threshold: 50)" >&2
+    exit 1
+fi
 
 STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$' || true)
 [ -z "$STAGED" ] && exit 0
