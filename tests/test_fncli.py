@@ -6,7 +6,6 @@ import fncli
 from fncli import (
     RegistrationError,
     UsageError,
-    bare,
     cli,
     commands,
     dispatch,
@@ -592,11 +591,11 @@ def test_bare_runs_on_empty_args(capsys):
 
     called: list[bool] = []
 
+    @cli(name="myapp", bare=True)
     def dashboard():
         called.append(True)
         sys.stdout.write("dashboard output\n")
 
-    bare("myapp", dashboard)
     result = try_dispatch(["myapp"])
     assert result == 0
     assert called == [True]
@@ -608,7 +607,10 @@ def test_bare_skipped_on_help(capsys):
     def start():
         """start it"""
 
-    bare("myapp", lambda: sys.stdout.write("nope\n"))
+    @cli(name="myapp", bare=True)
+    def nope():
+        sys.stdout.write("nope\n")
+
     result = try_dispatch(["myapp", "--help"])
     assert result == 0
     out = capsys.readouterr().out
@@ -621,7 +623,10 @@ def test_bare_return_code():
     def start():
         """start it"""
 
-    bare("myapp", lambda: 1)
+    @cli(name="myapp", bare=True)
+    def bad_rc():
+        return 1
+
     assert try_dispatch(["myapp"]) == 1
 
 
@@ -630,10 +635,10 @@ def test_bare_usage_error(capsys):
     def start():
         """start it"""
 
+    @cli(name="myapp", bare=True)
     def bad():
         raise UsageError("nope")
 
-    bare("myapp", bad)
     assert try_dispatch(["myapp"]) == 1
     captured = capsys.readouterr()
     assert "nope" in captured.err
@@ -647,10 +652,10 @@ def test_bare_via_dispatch(capsys):
 
     called: list[bool] = []
 
+    @cli(name="myapp", bare=True)
     def dashboard():
         called.append(True)
 
-    bare("myapp", dashboard)
     result = dispatch(["myapp"])
     assert result == 0
     assert called == [True]
@@ -664,7 +669,10 @@ def test_bare_does_not_block_subcommands(capsys):
         """start it"""
         order.append("start")
 
-    bare("myapp", lambda: order.append("bare"))
+    @cli(name="myapp", bare=True)
+    def bare_handler():
+        order.append("bare")
+
     assert try_dispatch(["myapp", "start"]) == 0
     assert order == ["start"]
 
@@ -678,10 +686,10 @@ def test_bare_with_params(capsys):
 
     captured: list[dict] = []
 
+    @cli(name="myapp", bare=True, flags={"domain": ["-d", "--domain"]})
     def create(content: str, domain: str | None = None) -> None:
         captured.append({"content": content, "domain": domain})
 
-    bare("myapp", create, flags={"domain": ["-d", "--domain"]})
     assert try_dispatch(["myapp", "hello world", "-d", "ops"]) == 0
     assert captured == [{"content": "hello world", "domain": "ops"}]
 
@@ -693,7 +701,10 @@ def test_bare_with_params_missing_required(capsys):
     def start():
         """start it"""
 
-    bare("myapp", lambda content: None)
+    @cli(name="myapp", bare=True)
+    def create(content: str) -> None:
+        pass
+
     assert try_dispatch(["myapp"]) == 1
     assert "required" in capsys.readouterr().out
 

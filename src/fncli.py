@@ -29,7 +29,7 @@ _EMPTY = inspect.Parameter.empty
 
 # _REGISTRY: command key → Entry
 # _DEFAULTS: namespace → default command key
-# _BARE:     namespace → bare callback
+# _BARE:     namespace → bare handler Entry
 _REGISTRY: dict[str, "Entry"] = {}
 _DEFAULTS: dict[str, str] = {}
 _BARE: dict[str, "Entry"] = {}
@@ -311,10 +311,34 @@ def emit_error(msg: str) -> None:
     sys.stdout.write(msg)
 
 
+def _bare_usage(prefix: str) -> str | None:
+    """Build a usage string from the bare handler's params, if one exists."""
+    entry = _BARE.get(prefix)
+    if not entry:
+        return None
+    parts = [prefix]
+    for p in entry.params:
+        if p.positional:
+            parts.append(f"<{p.clean}>" if p.required else f"[{p.clean}]")
+        elif p.is_bool:
+            parts.append(f"[{p.flags[0]}]")
+        else:
+            parts.append(f"[{p.flags[0]} {p.clean.upper()}]")
+    return " ".join(parts)
+
+
 def _print_command_list(prefix: str, matches: list[tuple[str, str]]) -> None:
     lines = _collapse_commands(prefix, matches)
     col = max((len(cmd) for cmd, _ in lines), default=0)
-    sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
+    bare = _bare_usage(prefix)
+    if bare:
+        entry = _BARE[prefix]
+        sys.stdout.write(f"usage: {bare}\n")
+        if entry.description:
+            sys.stdout.write(f"       {entry.description}\n")
+        sys.stdout.write(f"\n   or: {prefix} <command> [args]\n\ncommands:\n")
+    else:
+        sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
     for cmd, desc in lines:
         sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
     sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
@@ -340,25 +364,6 @@ def _collapse_commands(prefix: str, matches: list[tuple[str, str]]) -> list[tupl
 # --- Registration ---
 
 
-def bare(
-    namespace: str,
-    fn: Callable[..., Any],
-    *,
-    flags: dict[str, list[str]] | None = None,
-    help: dict[str, str] | None = None,
-    required: list[str] | None = None,
-) -> None:
-    """Register a bare handler for a namespace — dispatched when no subcommand matches.
-
-    Unlike `default`, bare commands don't appear in manifest/commands.
-    `ledger insight "content" -d ops` dispatches to the bare handler for "ledger insight".
-    """
-    raw = getattr(fn, "__wrapped__", fn)
-    params = _build_params(raw, flags or {}, help or {}, set(required or []))
-    desc = raw.__doc__ or ""
-    _BARE[namespace] = Entry(fn=raw, params=params, description=desc, meta={})
-
-
 def cli(
     parent: str | None = None,
     *,
@@ -369,30 +374,42 @@ def cli(
     required: list[str] | None = None,
     aliases: list[str] | None = None,
     default: bool = False,
+    bare: bool = False,
     readonly: bool = False,
     meta: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        _name = name if name is not None else fn.__name__.replace("_", "-")
+        raw = getattr(fn, "__wrapped__", fn)
+        _name = name if name is not None else raw.__name__.replace("_", "-")
+
+        if bare:
+            # bare=True → register as bare handler for parent namespace.
+            # key = parent + fn name = the namespace this handles.
+            ns = f"{parent} {_name}".strip() if parent else _name
+            desc = description or raw.__doc__ or ""
+            params = _build_params(raw, flags or {}, help or {}, set(required or []))
+            _BARE[ns] = Entry(fn=raw, params=params, description=desc, meta={})
+            return fn
+
         key = f"{parent} {_name}".strip() if parent else _name
-        _assert_key_available(key, fn)
+        _assert_key_available(key, raw)
         if _name in RESERVED:
             raise RegistrationError(f"command name {_name!r} is reserved")
 
-        desc = description or fn.__doc__ or ""
-        params = _build_params(fn, flags or {}, help or {}, set(required or []))
+        desc = description or raw.__doc__ or ""
+        params = _build_params(raw, flags or {}, help or {}, set(required or []))
 
         merged = dict(meta or {})
         if readonly:
             merged["readonly"] = True
 
-        entry = Entry(fn=fn, params=params, description=desc, meta=merged)
+        entry = Entry(fn=raw, params=params, description=desc, meta=merged)
         _REGISTRY[key] = entry
         for a in aliases or []:
             if a in RESERVED:
                 raise RegistrationError(f"alias name {a!r} is reserved")
             alias_key = f"{parent} {a}".strip() if parent else a
-            _assert_key_available(alias_key, fn)
+            _assert_key_available(alias_key, raw)
             _REGISTRY[alias_key] = entry
         if default and parent:
             _DEFAULTS[parent] = key
@@ -817,7 +834,8 @@ def autodiscover(package_root: Path, package_name: str) -> None:
         import_root = import_root.parent
     for path in sorted(package_root.rglob("*.py")):
         try:
-            if "@cli(" not in path.read_text():
+            text = path.read_text()
+            if "@cli(" not in text:
                 continue
         except OSError:
             if _strict_discover():

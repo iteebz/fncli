@@ -1,6 +1,6 @@
 # fncli
 
-Turn any function into a CLI. One decorator. Zero ceremony.
+One decorator. Function signature is the CLI spec.
 
 ```python
 from fncli import cli
@@ -11,24 +11,12 @@ def deploy(target: str, force: bool = False):
     print(f"deploying to {target}")
 ```
 
-```python
-# myapp/__main__.py
-import sys
-import fncli
-from myapp import commands as _commands; _ = _commands
-
-def main():
-    fncli.run(["myapp", *sys.argv[1:]])
-```
-
 ```
 $ myapp deploy prod --force
 deploying to prod
 ```
 
-Signature → argparse. Docstring → help. Types → validation. One file, no dependencies.
-
-**File structure and command tree are independent.** `@cli` can go anywhere — one file can register commands under multiple namespaces. The CLI shape is declared by the decorator, not the file layout.
+Signature → parser. Docstring → help. Types → validation. One file, no dependencies.
 
 ## Install
 
@@ -38,23 +26,21 @@ pip install fncli
 
 ## Type mapping
 
-| annotation | CLI shape |
+| annotation | CLI behavior |
 |---|---|
 | `name: str` | required positional |
 | `n: int` | required positional, coerced to int |
 | `verbose: bool = False` | `--verbose` flag |
-| `count: int = 10` | `--count 10` optional flag |
-| `tags: list[str]` | positional varargs (`nargs="+"`) |
-| `tags: list[str] = []` | `--tags a b c` optional flag (`nargs="*"`) |
-| `filter: str \| None = None` | `--filter` optional flag |
+| `count: int = 10` | `--count 10` optional |
+| `tags: list[str]` | positional varargs |
+| `tags: list[str] = []` | `--tags a b c` optional |
+| `filter: str \| None = None` | `--filter` optional |
 
-Underscores in param names → hyphenated flags: `dry_run` → `--dry-run`.
-Underscores in function names → hyphenated commands: `list_all` → `list-all`.
-Trailing `_` stripped for reserved words: `type_: str` → `--type`.
+Naming: `dry_run` → `--dry-run`. `list_all` → `list-all`. Trailing `_` stripped: `type_` → `--type`.
 
 ## Subcommands
 
-First argument to `@cli()` is the parent namespace. Omit for top-level.
+First argument to `@cli()` is the parent namespace.
 
 ```python
 @cli()
@@ -67,8 +53,56 @@ def status(): ...                     # → "myapp status"
 def start(port: int = 8080): ...      # → "myapp server start"
 ```
 
-Dispatch is longest-match: `myapp server start` wins over `myapp server`.
-`myapp server --help` auto-lists subcommands.
+Dispatch is longest-match. `myapp server --help` auto-lists subcommands.
+
+## Bare namespaces
+
+When a namespace has one obvious default action, use `bare=True`. The namespace itself becomes the command — no subcommand needed.
+
+```python
+@cli("ledger", bare=True, flags={"domain": ["-d"]}, required=["domain"])
+def insight(content: str, domain: str | None = None):
+    """log an insight"""
+    ...
+
+@cli("ledger insight")
+def close(ref: str):
+    """close an insight"""
+    ...
+```
+
+```
+$ ledger insight "auth is fragile" -d security    # bare — namespace IS the verb
+$ ledger insight close i/abc123                    # named subcommand
+$ ledger insight --help
+usage: ledger insight <content> [-d DOMAIN]
+       log an insight
+
+   or: ledger insight <command> [args]
+
+commands:
+  close  close an insight
+```
+
+**How it works:** `@cli("ledger", bare=True)` on function `insight` registers a bare handler for namespace `"ledger insight"` (parent + fn name). Bare handlers:
+- Accept full positional and flag arguments (same parsing as `@cli`)
+- Don't appear in `commands()` or `manifest()` — they're invisible defaults
+- Yield to named subcommands (dispatch checks registry first)
+- Delegate `--help` to namespace help (shows subcommands + bare usage)
+
+**When to use bare vs named:** If the action is a lifecycle verb agents should know (`propose`, `commit`, `approve`), name it. If the action is just "the thing this namespace does" (create/add), make it bare.
+
+**Stacking bare + named** for commands that are both the default AND a lifecycle verb:
+
+```python
+@cli("ledger", name="decision", bare=True, required=["why"])
+@cli("ledger decision", required=["why"])
+def propose(content: str, why: str | None = None):
+    """propose a decision"""
+    ...
+```
+
+Both `ledger decision "X" --why "Y"` and `ledger decision propose "X" --why "Y"` work.
 
 ## `@cli()` options
 
@@ -79,9 +113,10 @@ Dispatch is longest-match: `myapp server start` wins over `myapp server`.
     description="...",     # override help text (default: fn.__doc__)
     flags={...},           # custom flag names or positional-optional
     help={...},            # per-param help: {"param": "description"}
-    required=["param"],    # force a flag to be required
+    required=["param"],    # force a defaulted param to be required
     aliases=["s"],         # additional dispatch keys
-    default=True,          # run when parent is invoked bare
+    default=True,          # run when parent is invoked with no subcommand match
+    bare=True,             # register as bare handler for parent + fn_name namespace
     readonly=True,         # metadata tag; query with readonly()
     meta={...},            # arbitrary metadata; query with meta() / where()
 )
@@ -95,7 +130,7 @@ def build(target: str | None = None, output: str = "dist"): ...
 ```
 
 - `["-o", "--output"]` — custom short + long flags
-- `[]` — positional-optional: consumed by position (`nargs="?"`)
+- `[]` — positional-optional: consumed by position
 
 ## Aliases
 
@@ -105,24 +140,7 @@ def status(): ...
 # myapp s, myapp stat, myapp status all work
 
 fncli.alias("myapp server tail", "myapp tail")
-fncli.alias_namespace("myapp log", "myapp add")  # snapshot at call time
-```
-
-## Default subcommand
-
-```python
-@cli("myapp server", default=True)
-def start(port: int = 8080): ...
-# `myapp server` → runs start
-# `myapp server start` also works
-```
-
-## Bare callback
-
-```python
-fncli.bare("myapp", lambda: print("welcome"))
-# `myapp` → prints welcome
-# `myapp --help` → shows subcommand list (bare is skipped)
+fncli.alias_namespace("myapp log", "myapp add")
 ```
 
 ## Error handling
@@ -133,21 +151,21 @@ from fncli import UsageError, StateError
 @cli("myapp")
 def deploy(env: str):
     if env not in ("staging", "prod"):
-        raise UsageError(f"unknown env: {env}")  # clean stderr + exit 1
+        raise UsageError(f"unknown env: {env}")  # stderr + exit 1 + "Run --help"
 ```
 
-`UsageError` appends "Run --help for usage." `StateError` does not (correct usage, wrong state).
-Return an int to set exit code. `None` / no return → exit 0.
+`UsageError` → appends "Run --help for usage." `StateError` → does not (correct syntax, wrong state).
+Return an int for exit code. `None` / no return → exit 0.
 
 ## Entrypoint
 
 ```python
 fncli.run(["myapp", *sys.argv[1:]])       # dispatch + sys.exit
-fncli.dispatch(argv)                       # returns exit code; prints help on miss
+fncli.dispatch(argv)                       # returns exit code
 fncli.try_dispatch(argv)                   # returns None on miss
 ```
 
-`autodiscover` scans for `@cli(` and imports — no routing table:
+`autodiscover` scans for `@cli(` and auto-imports — no routing table:
 
 ```python
 fncli.autodiscover(Path(__file__).parent, "myapp")
@@ -162,13 +180,13 @@ Unknown command: strat. Did you mean: start, status?
 
 ## Testing
 
-`invoke()` captures stdout, stderr, and exit code — traps `SystemExit`:
-
 ```python
 result = fncli.invoke(["myapp", "deploy", "prod"])
 assert result.exit_code == 0
 assert "deploying to prod" in result.stdout
 ```
+
+`invoke()` captures stdout, stderr, and exit code. Traps `SystemExit`.
 
 ## Shell completions
 
@@ -176,25 +194,20 @@ assert "deploying to prod" in result.stdout
 eval "$(myapp completions zsh)"   # bash, zsh, fish
 ```
 
-Subcommands and flags derived from the registry at runtime. `completions` and `__complete` are hidden from `--help`.
-
 ## Selftest
 
 ```
 $ myapp selftest           # smoke-test --help on all commands
 $ myapp selftest --live    # also run readonly no-arg commands
-$ myapp selftest --quiet   # summary only
 ```
-
-Hidden from `--help`. Useful in CI.
 
 ## Introspection
 
 ```python
 fncli.commands()           # sorted list of all registered keys
-fncli.entries()            # [(key, fn, parser), ...]
-fncli.manifest()           # structured dict of all commands — for agents
-fncli.meta(key)            # metadata dict for key
+fncli.entries()            # [(key, fn, params), ...]
+fncli.manifest()           # structured dict — for agent consumption
+fncli.meta(key)            # metadata dict
 fncli.where(**kwargs)      # keys matching metadata predicates
 fncli.readonly(key)        # True if readonly=True
 ```
