@@ -102,7 +102,7 @@ def propose(content: str, why: str | None = None):
     ...
 ```
 
-Both `ledger decision "X" --why "Y"` and `ledger decision propose "X" --why "Y"` work.
+Both `ledger decision "X" --why "Y"` and `ledger decision propose "X" --why "Y"` work. Keep decorator params in sync — they're adjacent so drift is visible.
 
 ## `@cli()` options
 

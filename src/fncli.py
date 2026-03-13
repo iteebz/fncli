@@ -469,7 +469,10 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
 
 def _subcommand_matches(prefix: str, token: str) -> bool:
     candidate = prefix + " " + token
-    return any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
+    return (
+        candidate in _BARE
+        or any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
+    )
 
 
 def _show_namespace(prefix: str, argv: list[str]) -> int | None:
