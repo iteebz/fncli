@@ -669,6 +669,35 @@ def test_bare_does_not_block_subcommands(capsys):
     assert order == ["start"]
 
 
+def test_bare_with_params(capsys):
+    """Bare handlers accept positional and flag arguments."""
+
+    @cli("myapp")
+    def start():
+        """start it"""
+
+    captured: list[dict] = []
+
+    def create(content: str, domain: str | None = None) -> None:
+        captured.append({"content": content, "domain": domain})
+
+    bare("myapp", create, flags={"domain": ["-d", "--domain"]})
+    assert try_dispatch(["myapp", "hello world", "-d", "ops"]) == 0
+    assert captured == [{"content": "hello world", "domain": "ops"}]
+
+
+def test_bare_with_params_missing_required(capsys):
+    """Bare handlers enforce required positional args."""
+
+    @cli("myapp")
+    def start():
+        """start it"""
+
+    bare("myapp", lambda content: None)
+    assert try_dispatch(["myapp"]) == 1
+    assert "required" in capsys.readouterr().out
+
+
 # --- help= per-param descriptions ---
 
 

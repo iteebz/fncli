@@ -32,7 +32,7 @@ _EMPTY = inspect.Parameter.empty
 # _BARE:     namespace → bare callback
 _REGISTRY: dict[str, "Entry"] = {}
 _DEFAULTS: dict[str, str] = {}
-_BARE: dict[str, Callable[..., Any]] = {}
+_BARE: dict[str, "Entry"] = {}
 
 RESERVED: frozenset[str] = frozenset({"selftest", "completions", "__complete"})
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
@@ -340,8 +340,23 @@ def _collapse_commands(prefix: str, matches: list[tuple[str, str]]) -> list[tupl
 # --- Registration ---
 
 
-def bare(namespace: str, fn: Callable[..., Any]) -> None:
-    _BARE[namespace] = fn
+def bare(
+    namespace: str,
+    fn: Callable[..., Any],
+    *,
+    flags: dict[str, list[str]] | None = None,
+    help: dict[str, str] | None = None,
+    required: list[str] | None = None,
+) -> None:
+    """Register a bare handler for a namespace — dispatched when no subcommand matches.
+
+    Unlike `default`, bare commands don't appear in manifest/commands.
+    `ledger insight "content" -d ops` dispatches to the bare handler for "ledger insight".
+    """
+    raw = getattr(fn, "__wrapped__", fn)
+    params = _build_params(raw, flags or {}, help or {}, set(required or []))
+    desc = raw.__doc__ or ""
+    _BARE[namespace] = Entry(fn=raw, params=params, description=desc, meta={})
 
 
 def cli(
@@ -409,9 +424,7 @@ def cli(
 # --- Dispatch ---
 
 
-def _dispatch_one(key: str, argv: list[str]) -> int:
-    entry = _REGISTRY[key]
-
+def _dispatch_entry(key: str, entry: Entry, argv: list[str]) -> int:
     if _HELP_FLAGS & set(argv):
         sys.stdout.write(_format_help(key, entry.description, entry.params))
         return 0
@@ -431,6 +444,10 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
     except UsageError as e:
         emit_error(f"{e}\nRun `{key} --help` for usage.\n")
         return 1
+
+
+def _dispatch_one(key: str, argv: list[str]) -> int:
+    return _dispatch_entry(key, _REGISTRY[key], argv)
 
 
 def _subcommand_matches(prefix: str, token: str) -> bool:
@@ -480,19 +497,17 @@ def try_dispatch(argv: list[str]) -> int | None:
                 if result is not None:
                     return result
             return _dispatch_one(_DEFAULTS[key], remaining)
+        if key in _BARE:
+            if remaining and bool(_HELP_FLAGS & set(remaining)):
+                result = _show_namespace(key, argv)
+                if result is not None:
+                    return result
+            return _dispatch_entry(key, _BARE[key], remaining)
 
-    # Bare callback
+    # Bare fallback (no args)
     has_help = bool(_HELP_FLAGS & set(argv))
     non_help = [a for a in argv if a not in _HELP_FLAGS]
     prefix = " ".join(non_help)
-
-    if prefix in _BARE and not has_help:
-        try:
-            result = _BARE[prefix]()
-            return result if isinstance(result, int) else 0
-        except (StateError, UsageError) as e:
-            emit_error(f"{e}\n")
-            return 1
 
     if len(non_help) <= 1 and not has_help:
         return None
