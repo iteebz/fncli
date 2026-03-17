@@ -27,9 +27,6 @@ from typing import Any
 
 _EMPTY = inspect.Parameter.empty
 
-# _REGISTRY: command key → Entry
-# _DEFAULTS: namespace → default command key
-# _BARE:     namespace → bare handler Entry
 _REGISTRY: dict[str, "Entry"] = {}
 _DEFAULTS: dict[str, str] = {}
 _BARE: dict[str, "Entry"] = {}
@@ -469,9 +466,8 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
 
 def _subcommand_matches(prefix: str, token: str) -> bool:
     candidate = prefix + " " + token
-    return (
-        candidate in _BARE
-        or any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
+    return candidate in _BARE or any(
+        k == candidate or k.startswith(candidate + " ") for k in _REGISTRY
     )
 
 
