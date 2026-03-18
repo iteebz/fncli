@@ -90,9 +90,15 @@ def _build_params(
     help_strings: dict[str, str],
     required_names: set[str],
 ) -> list[Param]:
+    # Resolve forward-reference / string annotations (handles `from __future__ import annotations`)
+    try:
+        resolved_hints = typing.get_type_hints(fn)
+    except Exception:
+        resolved_hints = {}
+
     params: list[Param] = []
     for pname, param in inspect.signature(fn).parameters.items():
-        ann = param.annotation
+        ann = resolved_hints.get(pname, param.annotation)
         raw = _unwrap_optional(ann) if ann is not _EMPTY else str
         is_list = typing.get_origin(raw) is list
         inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str

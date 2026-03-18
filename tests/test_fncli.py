@@ -197,6 +197,38 @@ def test_int_positional():
     assert captured[-1] == 5
 
 
+def test_string_annotations_coerce_int_and_bool():
+    """from __future__ import annotations turns type hints into strings.
+    _build_params must resolve them so int/bool coercion still works.
+    """
+    from fncli import invoke
+
+    int_captured: list[int] = []
+    bool_captured: list[bool] = []
+
+    def count(n=0):
+        int_captured.append(n)
+
+    def flag(verbose=False):
+        bool_captured.append(verbose)
+
+    # Simulate what `from __future__ import annotations` does
+    count.__annotations__ = {"n": "int"}
+    flag.__annotations__ = {"verbose": "bool"}
+
+    cli()(count)
+    cli()(flag)
+
+    result = invoke(["count", "--n", "7"])
+    assert result.exit_code == 0
+    assert int_captured and int_captured[-1] == 7
+    assert isinstance(int_captured[-1], int), f"expected int, got {type(int_captured[-1])}"
+
+    result = invoke(["flag", "--verbose"])
+    assert result.exit_code == 0
+    assert bool_captured and bool_captured[-1] is True
+
+
 # --- dispatch ---
 
 
