@@ -9,6 +9,7 @@ from fncli import (
     cli,
     commands,
     dispatch,
+    invoke,
     meta,
     readonly,
     try_dispatch,
@@ -201,8 +202,6 @@ def test_string_annotations_coerce_int_and_bool():
     """from __future__ import annotations turns type hints into strings.
     _build_params must resolve them so int/bool coercion still works.
     """
-    from fncli import invoke
-
     int_captured: list[int] = []
     bool_captured: list[bool] = []
 
