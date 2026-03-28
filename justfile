@@ -10,7 +10,7 @@ hooks:
     @chmod +x .git/hooks/pre-commit
 
 format:
-    uv run ruff format . && uv run ruff check --fix .
+    uv run ruff format . && uv run ruff check --fix . || true
 
 lint:
     uv run ruff check .
