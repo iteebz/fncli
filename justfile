@@ -9,14 +9,16 @@ hooks:
     @cp scripts/hooks/pre-commit .git/hooks/pre-commit
     @chmod +x .git/hooks/pre-commit
 
+format:
+    uv run ruff format . && uv run ruff check --fix .
+
 lint:
-    #!/bin/bash
-    set -e
-    uv run ruff format .
-    uv run ruff check . --fix
+    uv run ruff check .
+
+typecheck:
     uv run pyright
 
-ci: lint
+ci: lint typecheck
     @uv run pytest tests -q --tb=no || [ $? -eq 5 ]
 
 test:
