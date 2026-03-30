@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "fncli"
 version = "0.1.0"
 description = "Function signature as CLI spec. One decorator, zero boilerplate."
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = []
 
 [tool.hatch.build.targets.wheel]
@@ -21,14 +21,14 @@ dev = [
 ]
 
 [tool.pyright]
-pythonVersion = "3.12"
+pythonVersion = "3.10"
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py310"
 
 [tool.ruff.format]
 quote-style = "double"
