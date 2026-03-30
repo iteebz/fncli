@@ -44,8 +44,8 @@ release VERSION: ci
       exit 1
     fi
     sed -i '' "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
-    git diff --quiet pyproject.toml || \
-      git commit pyproject.toml -m "release(fncli): v$VERSION"
+    uv lock
+    git commit pyproject.toml uv.lock -m "release(fncli): v$VERSION"
     git tag "v$VERSION"
     rm -rf dist
     uv build
