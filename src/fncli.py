@@ -143,9 +143,14 @@ def _build_params(
 # --- Parsing ---
 
 
-def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
-    """Parse argv against param specs, return kwargs dict."""
+def _parse(params: list[Param], argv: list[str], *, passthrough: bool = False) -> dict[str, Any]:
+    """Parse argv against param specs, return kwargs dict.
+
+    When passthrough=True, unknown flags and extra positionals collect into
+    result["_rest"] instead of raising UsageError.
+    """
     result: dict[str, Any] = {}
+    rest: list[str] = []
     positionals = [p for p in params if p.positional]
     all_flags = {f: p for p in params if not p.positional for f in p.flags}
     pos_idx = 0
@@ -160,6 +165,10 @@ def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
                 key, _, value = token.partition("=")
                 param = all_flags.get(key)
                 if param is None:
+                    if passthrough:
+                        rest.append(token)
+                        i += 1
+                        continue
                     raise UsageError(f"unknown flag: {key}")
                 if param.is_bool:
                     raise UsageError(f"{key} is a flag and does not take a value")
@@ -172,6 +181,15 @@ def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
 
             param = all_flags.get(token)
             if param is None:
+                if passthrough:
+                    rest.append(token)
+                    # Consume the next token too if it looks like a value
+                    if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                        rest.append(argv[i + 1])
+                        i += 2
+                    else:
+                        i += 1
+                    continue
                 raise UsageError(f"unknown flag: {token}")
 
             if param.is_bool:
@@ -200,6 +218,10 @@ def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
 
         # Positional argument
         if pos_idx >= len(positionals):
+            if passthrough:
+                rest.append(token)
+                i += 1
+                continue
             raise UsageError(f"unexpected argument: {token}")
 
         p = positionals[pos_idx]
@@ -230,6 +252,9 @@ def _parse(params: list[Param], argv: list[str]) -> dict[str, Any]:
             label = f"<{p.clean}>" if p.positional else p.flags[0]
             raise UsageError(f"{label} is required")
         result[p.name] = p.default
+
+    if passthrough:
+        result["_rest"] = rest
 
     return result
 
@@ -295,6 +320,7 @@ class Entry:
     params: list[Param]
     description: str
     meta: dict[str, Any]
+    passthrough: bool = False
 
 
 def _strict_discover() -> bool:
@@ -379,6 +405,7 @@ def cli(
     default: bool = False,
     bare: bool = False,
     readonly: bool = False,
+    passthrough: bool = False,
     meta: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -391,8 +418,29 @@ def cli(
             ns = f"{parent} {_name}".strip() if parent else _name
             desc = description or raw.__doc__ or ""
             params = _build_params(raw, flags or {}, help or {}, set(required or []))
-            _BARE[ns] = Entry(fn=raw, params=params, description=desc, meta={})
-            return fn
+            _BARE[ns] = Entry(fn=raw, params=params, description=desc, meta={}, passthrough=passthrough)
+
+            # Wrap so pyproject entry points parse sys.argv.
+            def bare_wrapper(*args: Any, **kwargs: Any) -> Any:
+                if args or kwargs:
+                    return raw(*args, **kwargs)
+                argv = sys.argv[1:]
+                if _HELP_FLAGS & set(argv):
+                    sys.stdout.write(_format_help(ns, desc, params))
+                    sys.exit(0)
+                try:
+                    parsed = _parse(params, argv, passthrough=passthrough)
+                    result = raw(**parsed)
+                    sys.exit(result if isinstance(result, int) else 0)
+                except StateError as e:
+                    emit_error(f"{e}\n")
+                    sys.exit(1)
+                except UsageError as e:
+                    emit_error(f"{e}\nRun `{ns} --help` for usage.\n")
+                    sys.exit(1)
+
+            bare_wrapper.__wrapped__ = raw  # type: ignore[attr-defined]
+            return bare_wrapper
 
         key = f"{parent} {_name}".strip() if parent else _name
         _assert_key_available(key, raw)
@@ -406,7 +454,7 @@ def cli(
         if readonly:
             merged["readonly"] = True
 
-        entry = Entry(fn=raw, params=params, description=desc, meta=merged)
+        entry = Entry(fn=raw, params=params, description=desc, meta=merged, passthrough=passthrough)
         _REGISTRY[key] = entry
         for a in aliases or []:
             if a in RESERVED:
@@ -425,7 +473,7 @@ def cli(
                 sys.stdout.write(_format_help(key, desc, params))
                 sys.exit(0)
             try:
-                parsed = _parse(params, argv)
+                parsed = _parse(params, argv, passthrough=passthrough)
                 result = fn(**parsed)
                 sys.exit(result if isinstance(result, int) else 0)
             except StateError as e:
@@ -450,7 +498,7 @@ def _dispatch_entry(key: str, entry: Entry, argv: list[str]) -> int:
         return 0
 
     try:
-        parsed = _parse(entry.params, argv)
+        parsed = _parse(entry.params, argv, passthrough=entry.passthrough)
     except UsageError as e:
         emit_error(f"{key}: {e}\nRun `{key} --help` for usage.\n")
         return 1

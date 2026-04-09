@@ -1016,3 +1016,66 @@ def test_autodiscover_strict_discover_on_read_error(tmp_path, monkeypatch):
     monkeypatch.setenv("FNCLI_STRICT_DISCOVER", "1")
     with pytest.raises(OSError):
         fncli.autodiscover(pkg_root, "pkg")
+
+
+# --- passthrough ---
+
+
+def test_passthrough_collects_unknown_flags():
+    @cli("app", passthrough=True)
+    def launch(identity: str = "zealot", _rest: list[str] | None = None):
+        return _rest
+
+    result = invoke(["app", "launch", "heretic", "-r", "--verbose", "--foo=bar"])
+    assert result.exit_code == 0
+
+
+def test_passthrough_preserves_known_flags():
+    captured = {}
+
+    @cli("app", passthrough=True, flags={"identity": [], "m1": ["--1m"]})
+    def launch(identity: str = "zealot", m1: bool = False, _rest: list[str] | None = None):
+        captured["identity"] = identity
+        captured["m1"] = m1
+        captured["rest"] = _rest
+
+    invoke(["app", "launch", "heretic", "--1m", "-r", "--resume"])
+    assert captured["identity"] == "heretic"
+    assert captured["m1"] is True
+    assert captured["rest"] == ["-r", "--resume"]
+
+
+def test_passthrough_bare_collects_unknown():
+    captured = {}
+
+    @cli("launcher", bare=True, passthrough=True, flags={"identity": []})
+    def launcher(identity: str = "zealot", _rest: list[str] | None = None):
+        captured["identity"] = identity
+        captured["rest"] = _rest
+
+    sys.argv = ["launcher", "heretic", "-r", "-c"]
+    with pytest.raises(SystemExit) as exc_info:
+        launcher()
+    assert exc_info.value.code == 0
+    assert captured["identity"] == "heretic"
+    assert captured["rest"] == ["-r", "-c"]
+
+
+def test_no_passthrough_rejects_unknown():
+    @cli("app")
+    def launch(identity: str = "zealot"):
+        pass
+
+    result = invoke(["app", "launch", "--unknown"])
+    assert result.exit_code == 1
+
+
+def test_passthrough_unknown_flag_with_value():
+    captured = {}
+
+    @cli("app", passthrough=True)
+    def run(name: str = "default", _rest: list[str] | None = None):
+        captured["rest"] = _rest
+
+    invoke(["app", "run", "--session", "abc123"])
+    assert captured["rest"] == ["--session", "abc123"]
