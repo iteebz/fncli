@@ -320,9 +320,7 @@ def test_usage_error_returns_one(capsys):
 
 
 def test_usage_error_caught_by_run_before_dispatch(capsys, monkeypatch):
-    monkeypatch.setattr(
-        fncli, "dispatch", lambda _argv: (_ for _ in ()).throw(UsageError("pre-dispatch boom"))
-    )
+    monkeypatch.setattr(fncli, "dispatch", lambda _argv: (_ for _ in ()).throw(UsageError("pre-dispatch boom")))
     with pytest.raises(SystemExit) as exc_info:
         fncli.run(["anything"])
     assert exc_info.value.code == 1
@@ -936,6 +934,60 @@ def test_completions_fish_output_contains_complete_command(capsys):
     out = capsys.readouterr().out
     assert "complete" in out
     assert "myapp" in out
+
+
+# --- VAR_POSITIONAL (*args) ---
+
+
+def test_var_positional_single_arg():
+    captured: list = []
+
+    @cli("myapp")
+    def post(*tweets: str, dry_run: bool = False) -> None:
+        """post a thread"""
+        captured.extend(tweets)
+
+    assert dispatch(["myapp", "post", "hello world"]) == 0
+    assert captured == ["hello world"]
+
+
+def test_var_positional_multiple_args():
+    captured: list = []
+
+    @cli("myapp")
+    def post(*tweets: str, dry_run: bool = False) -> None:
+        """post a thread"""
+        captured.extend(tweets)
+
+    assert dispatch(["myapp", "post", "tweet one", "tweet two", "tweet three"]) == 0
+    assert captured == ["tweet one", "tweet two", "tweet three"]
+
+
+def test_var_positional_zero_args():
+    captured: list = []
+
+    @cli("myapp")
+    def post(*tweets: str) -> None:
+        """post a thread"""
+        captured.extend(tweets)
+
+    assert dispatch(["myapp", "post"]) == 0
+    assert captured == []
+
+
+def test_var_positional_with_flag():
+    captured: list = []
+    dry: list = []
+
+    @cli("myapp")
+    def post(*tweets: str, dry_run: bool = False) -> None:
+        """post a thread"""
+        captured.extend(tweets)
+        dry.append(dry_run)
+
+    assert dispatch(["myapp", "post", "hello", "world", "--dry-run"]) == 0
+    assert captured == ["hello", "world"]
+    assert dry == [True]
 
 
 def test_completions_unknown_shell_returns_one(capsys):

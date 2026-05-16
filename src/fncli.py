@@ -66,6 +66,7 @@ class Param:
     flags: list[str]  # e.g. ["--verbose", "-v"] or [] for positionals
     positional: bool  # consumed by position (no -- prefix)
     help: str  # per-param help string
+    is_var_positional: bool = False  # *args style — collects all remaining positionals
 
     @property
     def required(self) -> bool:
@@ -98,16 +99,23 @@ def _build_params(
 
     params: list[Param] = []
     for pname, param in inspect.signature(fn).parameters.items():
+        is_var_positional = param.kind is inspect.Parameter.VAR_POSITIONAL
         ann = resolved_hints.get(pname, param.annotation)
         raw = _unwrap_optional(ann) if ann is not _EMPTY else str
-        is_list = typing.get_origin(raw) is list
-        inner = typing.get_args(raw)[0] if is_list and typing.get_args(raw) else str
+        # *args params have no list annotation but collect multiple values
+        is_list = typing.get_origin(raw) is list or is_var_positional
+        inner = (
+            typing.get_args(raw)[0]
+            if typing.get_origin(raw) is list and typing.get_args(raw)
+            else (raw if not is_var_positional else str)
+        )
         is_bool = raw is bool and not is_list
 
         explicit_flags = flag_overrides.get(pname)
         clean = pname.rstrip("_")
-        no_default = param.default is _EMPTY
-        positional = no_default or explicit_flags == []
+        # VAR_POSITIONAL has no default in inspect but is always optional (zero or more args)
+        no_default = param.default is _EMPTY and not is_var_positional
+        positional = no_default or explicit_flags == [] or is_var_positional
 
         # Resolve flags and bool semantics
         if positional:
@@ -121,7 +129,8 @@ def _build_params(
             bool_value = True
 
         # required= makes a defaulted param act required at parse time
-        default = _EMPTY if (no_default or pname in required_names) else param.default
+        # VAR_POSITIONAL (*args) defaults to empty list when no args provided
+        default = [] if is_var_positional else _EMPTY if no_default or pname in required_names else param.default
 
         params.append(
             Param(
@@ -135,6 +144,7 @@ def _build_params(
                 flags=flags,
                 positional=positional,
                 help=help_strings.get(pname, ""),
+                is_var_positional=is_var_positional,
             )
         )
     return params
@@ -291,9 +301,7 @@ def _format_help(key: str, description: str, params: list[Param]) -> str:
 
     if positional_params:
         lines.append("\npositional arguments:")
-        lines.extend(
-            f"  {p.clean}  {p.help}" if p.help else f"  {p.clean}" for p in positional_params
-        )
+        lines.extend(f"  {p.clean}  {p.help}" if p.help else f"  {p.clean}" for p in positional_params)
 
     lines.append("\noptions:")
     lines.append("  -h, --help  show this help message and exit")
@@ -504,7 +512,13 @@ def _dispatch_entry(key: str, entry: Entry, argv: list[str]) -> int:
         return 1
 
     try:
-        result = entry.fn(**parsed)
+        # VAR_POSITIONAL params (*args) must be splatted positionally, not passed as kwargs.
+        var_pos = next((p for p in entry.params if p.is_var_positional), None)
+        if var_pos and var_pos.name in parsed:
+            var_values = parsed.pop(var_pos.name)
+            result = entry.fn(*var_values, **parsed)
+        else:
+            result = entry.fn(**parsed)
         return result if isinstance(result, int) else 0
     except StateError as e:
         emit_error(f"{e}\n")
@@ -520,17 +534,13 @@ def _dispatch_one(key: str, argv: list[str]) -> int:
 
 def _subcommand_matches(prefix: str, token: str) -> bool:
     candidate = prefix + " " + token
-    return candidate in _BARE or any(
-        k == candidate or k.startswith(candidate + " ") for k in _REGISTRY
-    )
+    return candidate in _BARE or any(k == candidate or k.startswith(candidate + " ") for k in _REGISTRY)
 
 
 def _show_namespace(prefix: str, argv: list[str]) -> int | None:
     has_help = bool(_HELP_FLAGS & set(argv))
     matches = sorted(
-        (key, entry.description)
-        for key, entry in _REGISTRY.items()
-        if key.startswith(prefix + " ") and key != prefix
+        (key, entry.description) for key, entry in _REGISTRY.items() if key.startswith(prefix + " ") and key != prefix
     )
     if matches:
         _print_command_list(prefix, matches)
@@ -552,11 +562,7 @@ def try_dispatch(argv: list[str]) -> int | None:
         key = " ".join(argv[:depth])
         remaining = argv[depth:]
 
-        if (
-            remaining
-            and not remaining[0].startswith("-")
-            and _subcommand_matches(key, remaining[0])
-        ):
+        if remaining and not remaining[0].startswith("-") and _subcommand_matches(key, remaining[0]):
             continue
 
         if key in _REGISTRY:
@@ -584,9 +590,7 @@ def try_dispatch(argv: list[str]) -> int | None:
 
     # Namespace help or fuzzy match
     matches = sorted(
-        (key, entry.description)
-        for key, entry in _REGISTRY.items()
-        if key.startswith(prefix + " ") or key == prefix
+        (key, entry.description) for key, entry in _REGISTRY.items() if key.startswith(prefix + " ") or key == prefix
     )
     if matches:
         _print_command_list(prefix, matches)
@@ -697,9 +701,7 @@ def meta(key: str) -> dict[str, Any]:
 
 def where(**kwargs: Any) -> list[str]:
     return sorted(
-        k
-        for k, entry in _REGISTRY.items()
-        if all(entry.meta.get(field) == value for field, value in kwargs.items())
+        k for k, entry in _REGISTRY.items() if all(entry.meta.get(field) == value for field, value in kwargs.items())
     )
 
 
@@ -757,9 +759,7 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
                 try:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         ret = fn()
-                    result_entry["live"] = (
-                        "pass" if (ret is None or ret == 0) else f"FAIL(rc={ret})"
-                    )
+                    result_entry["live"] = "pass" if (ret is None or ret == 0) else f"FAIL(rc={ret})"
                 except SystemExit as e:
                     result_entry["live"] = "pass" if e.code == 0 else f"FAIL(exit={e.code})"
                 except Exception as e:
@@ -793,11 +793,7 @@ def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
                 lv = r.get("live", "skip")
                 sys.stdout.write(f"  FAIL  {r['command']:<{col}}  help={h}  live={lv}\n")
 
-    sys.stdout.write(
-        f"  {prog}: {total - failed}/{total} passed"
-        + (f"  ({failed} failed)" if failed else "")
-        + "\n"
-    )
+    sys.stdout.write(f"  {prog}: {total - failed}/{total} passed" + (f"  ({failed} failed)" if failed else "") + "\n")
     return 1 if failed else 0
 
 
