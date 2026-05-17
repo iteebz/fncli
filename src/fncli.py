@@ -513,10 +513,14 @@ def _dispatch_entry(key: str, entry: Entry, argv: list[str]) -> int:
 
     try:
         # VAR_POSITIONAL params (*args) must be splatted positionally, not passed as kwargs.
+        # Regular positionals before *args must also be extracted from parsed and passed positionally.
         var_pos = next((p for p in entry.params if p.is_var_positional), None)
         if var_pos and var_pos.name in parsed:
             var_values = parsed.pop(var_pos.name)
-            result = entry.fn(*var_values, **parsed)
+            # Extract preceding positional params in order so they aren't duplicated as kwargs.
+            pos_params = [p for p in entry.params if p.positional and not p.is_var_positional]
+            pos_values = [parsed.pop(p.name) for p in pos_params if p.name in parsed]
+            result = entry.fn(*pos_values, *var_values, **parsed)
         else:
             result = entry.fn(**parsed)
         return result if isinstance(result, int) else 0
