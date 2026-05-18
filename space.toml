@@ -1,4 +1,0 @@
-[ci]
-command = "just ci"
-background = true
-timeout = 60
