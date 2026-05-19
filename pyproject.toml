@@ -10,8 +10,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [tool.hatch.build.targets.wheel]
-include = ["src/fncli.py", "src/py.typed"]
-sources = ["src"]
+include = ["fncli.py", "py.typed"]
 
 [dependency-groups]
 dev = [
@@ -67,7 +66,7 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
-pythonpath = ["src"]
+pythonpath = ["."]
 addopts = [
     "--strict-markers",
     "--strict-config",
