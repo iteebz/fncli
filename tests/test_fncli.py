@@ -1070,6 +1070,33 @@ def test_autodiscover_strict_discover_on_read_error(tmp_path, monkeypatch):
         fncli.autodiscover(pkg_root, "pkg")
 
 
+def test_autodiscover_skips_dunder_main(tmp_path, monkeypatch):
+    """__main__.py is an entry point, not a command module — skip it."""
+    pkg_root = tmp_path / "pkg"
+    pkg_root.mkdir()
+    (pkg_root / "__init__.py").write_text("")
+    (pkg_root / "__main__.py").write_text(
+        'from fncli import cli\n@cli("pkg")\ndef boom():\n    """should not register"""\n'
+    )
+    (pkg_root / "real.py").write_text('from fncli import cli\n@cli("pkg")\ndef real():\n    """real command"""\n')
+    monkeypatch.syspath_prepend(tmp_path)
+    fncli.autodiscover(pkg_root, "pkg")
+    assert "pkg real" in fncli._REGISTRY
+    assert "pkg boom" not in fncli._REGISTRY
+
+
+def test_autodiscover_init_no_double_register(tmp_path, monkeypatch):
+    """__init__.py with @cli should import as package name, not package.__init__."""
+    pkg_root = tmp_path / "pkg2"
+    pkg_root.mkdir()
+    (pkg_root / "__init__.py").write_text('from fncli import cli\n@cli("pkg2")\ndef init_cmd():\n    """from init"""\n')
+    monkeypatch.syspath_prepend(tmp_path)
+    fncli.autodiscover(pkg_root, "pkg2")
+    assert "pkg2 init-cmd" in fncli._REGISTRY
+    # calling again should not raise RegistrationError
+    fncli.autodiscover(pkg_root, "pkg2")
+
+
 # --- passthrough ---
 
 
