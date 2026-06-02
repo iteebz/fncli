@@ -40,18 +40,11 @@ class UsageError(Exception):
 
 
 class StateError(Exception):
-    """Command was understood, but the object is in the wrong state.
-
-    Unlike UsageError, this does NOT append 'Run --help for usage.' —
-    the caller used the CLI correctly; the issue is state, not syntax.
-    """
+    """Correct usage, wrong state — no 'Run --help' suffix."""
 
 
 class RegistrationError(Exception):
     pass
-
-
-# --- Parameter model ---
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -319,9 +312,6 @@ def _format_help(key: str, description: str, params: list[Param]) -> str:
     return "\n".join(lines) + "\n"
 
 
-# --- Registry ---
-
-
 @dataclasses.dataclass(slots=True)
 class Entry:
     fn: Callable[..., Any]
@@ -495,9 +485,6 @@ def cli(
         return wrapper
 
     return decorator
-
-
-# --- Dispatch ---
 
 
 def _dispatch_entry(key: str, entry: Entry, argv: list[str]) -> int:
@@ -714,7 +701,7 @@ def entries() -> list[tuple[str, Callable[..., Any], list[Param]]]:
 
 
 def manifest() -> dict[str, Any]:
-    """Structured description of all registered commands, for agent consumption."""
+    """All registered commands as structured dict."""
     result: dict[str, Any] = {}
     for key, entry in sorted(_REGISTRY.items()):
         params: list[dict[str, Any]] = []
@@ -736,9 +723,6 @@ def manifest() -> dict[str, Any]:
             "meta": entry.meta,
         }
     return result
-
-
-# --- Built-in commands ---
 
 
 def _selftest(prog: str, live: bool = False, quiet: bool = False) -> int:
@@ -877,15 +861,14 @@ def _completions(prog: str, shell: str) -> int:
     return 0
 
 
-# --- Discovery ---
-
-
 def autodiscover(package_root: Path, package_name: str) -> None:
     depth = len(package_name.split("."))
     import_root = package_root.resolve()
     for _ in range(depth):
         import_root = import_root.parent
     for path in sorted(package_root.rglob("*.py")):
+        if path.name == "__main__.py":
+            continue
         try:
             text = path.read_text()
             if "@cli(" not in text:
@@ -895,7 +878,13 @@ def autodiscover(package_root: Path, package_name: str) -> None:
                 raise
             continue
         rel = path.resolve().relative_to(import_root)
-        mod = ".".join(rel.with_suffix("").parts)
-        if not mod.startswith(package_name + "."):
+        parts = list(rel.with_suffix("").parts)
+        # __init__.py → package import, not package.__init__
+        if parts and parts[-1] == "__init__":
+            parts.pop()
+        mod = ".".join(parts)
+        if not mod.startswith(package_name + ".") and mod != package_name:
+            continue
+        if mod in sys.modules:
             continue
         importlib.import_module(mod)
