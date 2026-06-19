@@ -30,6 +30,7 @@ _EMPTY = inspect.Parameter.empty
 _REGISTRY: dict[str, "Entry"] = {}
 _DEFAULTS: dict[str, str] = {}
 _BARE: dict[str, "Entry"] = {}
+_GROUP_ORDER: dict[str, list[str]] = {}  # prefix → ordered group names
 
 RESERVED: frozenset[str] = frozenset({"selftest", "completions", "__complete"})
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
@@ -320,6 +321,15 @@ class Entry:
     meta: dict[str, Any]
     passthrough: bool = False
 
+    @property
+    def group(self) -> str | None:
+        return self.meta.get("group")
+
+
+def set_group_order(prefix: str, groups: list[str]) -> None:
+    """Define the display order of groups for a CLI namespace's --help output."""
+    _GROUP_ORDER[prefix] = groups
+
 
 def _strict_discover() -> bool:
     value = os.environ.get("FNCLI_STRICT_DISCOVER", "")
@@ -363,12 +373,56 @@ def _print_command_list(prefix: str, matches: list[tuple[str, str]]) -> None:
         sys.stdout.write(f"usage: {bare}\n")
         if entry.description:
             sys.stdout.write(f"       {entry.description}\n")
-        sys.stdout.write(f"\n   or: {prefix} <command> [args]\n\ncommands:\n")
+        sys.stdout.write(f"\n   or: {prefix} <command> [args]\n\n")
     else:
-        sys.stdout.write(f"usage: {prefix} <command> [args]\n\ncommands:\n")
+        sys.stdout.write(f"usage: {prefix} <command> [args]\n\n")
+
+    # Check if any registered commands under this prefix have groups.
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    ungrouped: list[tuple[str, str]] = []
+    seen_tokens: set[str] = set()
     for cmd, desc in lines:
-        sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
-    sys.stdout.write(f"\nRun `{prefix} <command> --help` for details.\n")
+        token = cmd.split(" ", 1)[0]
+        if token in seen_tokens:
+            continue
+        seen_tokens.add(token)
+        # Look up the group for this token from the registry.
+        # Direct key first; fall back to first sub-command (collapsed namespaces).
+        key = f"{prefix} {token}".strip()
+        entry = _REGISTRY.get(key)
+        if entry is None:
+            sub = next((e for k, e in _REGISTRY.items() if k.startswith(key + " ")), None)
+            entry = sub
+        grp = entry.group if entry else None
+        if grp:
+            grouped.setdefault(grp, []).append((cmd, desc))
+        else:
+            ungrouped.append((cmd, desc))
+
+    if grouped:
+        # Render grouped sections in declared order (or insertion order).
+        order = _GROUP_ORDER.get(prefix)
+        ordered_groups = order or list(grouped.keys())
+        # Any groups not in declared order appended at end.
+        remaining = [g for g in grouped if g not in ordered_groups]
+        ordered_groups = [g for g in ordered_groups if g in grouped] + remaining
+        for section in ordered_groups:
+            section_lines = grouped[section]
+            sys.stdout.write(f"{section}\n")
+            for cmd, desc in section_lines:
+                sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
+            sys.stdout.write("\n")
+        if ungrouped:
+            for cmd, desc in ungrouped:
+                sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
+            sys.stdout.write("\n")
+    else:
+        sys.stdout.write("commands:\n")
+        for cmd, desc in lines:
+            sys.stdout.write(f"  {cmd:<{col}}  {desc}\n")
+        sys.stdout.write("\n")
+
+    sys.stdout.write(f"Run `{prefix} <command> --help` for details.\n")
 
 
 def _collapse_commands(prefix: str, matches: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -404,6 +458,7 @@ def cli(
     bare: bool = False,
     readonly: bool = False,
     passthrough: bool = False,
+    group: str | None = None,
     meta: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -451,6 +506,8 @@ def cli(
         merged = dict(meta or {})
         if readonly:
             merged["readonly"] = True
+        if group is not None:
+            merged["group"] = group
 
         entry = Entry(fn=raw, params=params, description=desc, meta=merged, passthrough=passthrough)
         _REGISTRY[key] = entry
