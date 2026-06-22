@@ -1,3 +1,4 @@
+import json
 import sys
 
 import pytest
@@ -831,6 +832,30 @@ def test_manifest_structure():
     assert search_params["limit"]["default"] == 10
     assert search_params["limit"]["type"] == "option"
     assert "--limit" in search_params["limit"]["flags"]
+
+
+def test_manifest_cli_human():
+    @cli("app", readonly=True, group="info")
+    def status():
+        """show status"""
+
+    r = invoke(["app", "manifest"])
+    assert r.exit_code == 0
+    assert "app status" in r.stdout
+    assert "[ro]" in r.stdout
+    assert "(info)" in r.stdout
+
+
+def test_manifest_cli_json():
+    @cli("app", readonly=True)
+    def status():
+        """show status"""
+
+    r = invoke(["app", "manifest", "--json"])
+    assert r.exit_code == 0
+    data = json.loads(r.stdout)
+    assert "app status" in data
+    assert data["app status"]["meta"]["readonly"] is True
 
 
 def test_help_dict_partial(capsys):

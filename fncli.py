@@ -15,6 +15,7 @@ import difflib
 import importlib
 import inspect
 import io
+import json
 import os
 import sys
 import traceback
@@ -32,7 +33,7 @@ _DEFAULTS: dict[str, str] = {}
 _BARE: dict[str, "Entry"] = {}
 _GROUP_ORDER: dict[str, list[str]] = {}  # prefix → ordered group names
 
-RESERVED: frozenset[str] = frozenset({"selftest", "completions", "__complete"})
+RESERVED: frozenset[str] = frozenset({"selftest", "completions", "__complete", "manifest"})
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
 
 
@@ -598,6 +599,8 @@ def _show_namespace(prefix: str, argv: list[str]) -> int | None:
 
 def try_dispatch(argv: list[str]) -> int | None:
     # Built-in commands
+    if len(argv) >= 2 and argv[1] == "manifest":
+        return _manifest_cmd(argv[0], "--json" in argv[2:])
     if len(argv) >= 2 and argv[1] == "selftest":
         return _selftest(argv[0], live="--live" in argv[2:], quiet="--quiet" in argv[2:])
     if len(argv) >= 2 and argv[1] == "__complete":
@@ -755,6 +758,27 @@ def where(**kwargs: Any) -> list[str]:
 
 def entries() -> list[tuple[str, Callable[..., Any], list[Param]]]:
     return [(key, e.fn, e.params) for key, e in sorted(_REGISTRY.items())]
+
+
+def _manifest_cmd(prog: str, as_json: bool) -> int:
+    """Print the full command manifest — human table or JSON."""
+    data = manifest()
+    if as_json:
+        sys.stdout.write(json.dumps(data, indent=2) + "\n")
+        return 0
+    # Human-readable table
+    for key, info in data.items():
+        ro = " [ro]" if info["meta"].get("readonly") else ""
+        grp = info["meta"].get("group")
+        grp_str = f" ({grp})" if grp else ""
+        sys.stdout.write(f"  {key}{ro}{grp_str}\n")
+        if info["description"]:
+            sys.stdout.write(f"    {info['description']}\n")
+        for p in info["params"]:
+            flag_str = ", ".join(p.get("flags", [])) if p.get("flags") else p["name"]
+            req = " *" if p["required"] else ""
+            sys.stdout.write(f"      {flag_str}  ({p['type']}){req}\n")
+    return 0
 
 
 def manifest() -> dict[str, Any]:
