@@ -18,6 +18,7 @@ import io
 import json
 import os
 import sys
+import time
 import traceback
 import types
 import typing
@@ -35,6 +36,33 @@ _GROUP_ORDER: dict[str, list[str]] = {}  # prefix → ordered group names
 
 RESERVED: frozenset[str] = frozenset({"selftest", "completions", "__complete", "manifest"})
 _HELP_FLAGS: frozenset[str] = frozenset(("-h", "--help"))
+
+# Timing telemetry: every dispatched command's wall time, sunk to a JSONL file
+# for dyson to score as a query-time dimension. Slow commands (foundation
+# traces verify, api-backed brief/probe) are otherwise only felt anecdotally.
+_TIMING_LOG = Path.home() / ".space" / "cli_timings.jsonl"
+_SLOW_THRESHOLD_S = 3.0
+
+
+def _record_timing(key: str, elapsed_s: float) -> None:
+    try:
+        _TIMING_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _TIMING_LOG.open("a") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "ts": time.time(),
+                        "cmd": key,
+                        "duration_ms": round(elapsed_s * 1000),
+                        "pid": os.getpid(),
+                    }
+                )
+                + "\n"
+            )
+    except OSError:
+        return
+    if elapsed_s >= _SLOW_THRESHOLD_S:
+        emit_error(f"[fncli] slow: `{key}` took {elapsed_s:.1f}s\n")
 
 
 class UsageError(Exception):
@@ -145,7 +173,7 @@ def _build_params(
     return params
 
 
-# --- Parsing ---
+# Parsing
 
 
 def _parse(params: list[Param], argv: list[str], *, passthrough: bool = False) -> dict[str, Any]:
@@ -264,7 +292,7 @@ def _parse(params: list[Param], argv: list[str], *, passthrough: bool = False) -
     return result
 
 
-# --- Help formatting ---
+# Help formatting
 
 
 def _format_help(key: str, description: str, params: list[Param]) -> str:
@@ -443,7 +471,7 @@ def _collapse_commands(prefix: str, matches: list[tuple[str, str]]) -> list[tupl
     return lines
 
 
-# --- Registration ---
+# Registration
 
 
 def cli(
@@ -556,6 +584,14 @@ def _dispatch_entry(key: str, entry: Entry, argv: list[str]) -> int:
         emit_error(f"{key}: {e}\nRun `{key} --help` for usage.\n")
         return 1
 
+    start = time.perf_counter()
+    try:
+        return _dispatch_timed(key, entry, parsed)
+    finally:
+        _record_timing(key, time.perf_counter() - start)
+
+
+def _dispatch_timed(key: str, entry: Entry, parsed: dict) -> int:
     try:
         # VAR_POSITIONAL params (*args) must be splatted positionally, not passed as kwargs.
         # Regular positionals before *args must also be extracted from parsed and passed positionally.
@@ -675,7 +711,7 @@ def run(argv: list[str] | None = None) -> None:
     sys.exit(code)
 
 
-# --- Testing ---
+# Testing
 
 
 class Result:
@@ -704,7 +740,7 @@ def invoke(argv: list[str]) -> Result:
     return Result(code, out.getvalue(), err.getvalue())
 
 
-# --- Aliases ---
+# Aliases
 
 
 def alias(src: str, dst: str) -> None:
@@ -733,7 +769,7 @@ def alias_namespace(src: str, dst: str) -> None:
     _REGISTRY.update(updates)
 
 
-# --- Introspection ---
+# Introspection
 
 
 def commands() -> list[str]:
