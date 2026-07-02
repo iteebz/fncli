@@ -29,9 +29,6 @@ def clean_registry():
     fncli._BARE.clear()
 
 
-# --- registration ---
-
-
 def test_registers_by_function_name():
     @cli()
     def status():
@@ -83,9 +80,6 @@ def test_register_reserved_name_raises():
         @cli(name="selftest")
         def reserved():
             pass
-
-
-# --- argument parsing ---
 
 
 def test_positional_required():
@@ -229,9 +223,6 @@ def test_string_annotations_coerce_int_and_bool():
     assert bool_captured and bool_captured[-1] is True
 
 
-# --- dispatch ---
-
-
 def test_dispatch_no_match_returns_one(capsys):
     assert dispatch(["unknown"]) == 1
 
@@ -285,9 +276,6 @@ def test_dispatch_parent_called_with_flag_even_with_subcommands():
     assert order == ["app:True"]
 
 
-# --- return value propagation ---
-
-
 def test_int_return_propagates():
     @cli()
     def fail():
@@ -304,9 +292,6 @@ def test_int_return_propagates():
     assert dispatch(["fail"]) == 1
     assert dispatch(["succeed"]) == 0
     assert dispatch(["none-return"]) == 0
-
-
-# --- UsageError ---
 
 
 def test_usage_error_returns_one(capsys):
@@ -330,18 +315,12 @@ def test_usage_error_caught_by_run_before_dispatch(capsys, monkeypatch):
     assert "pre-dispatch boom" in captured.out
 
 
-# --- invalid args ---
-
-
 def test_invalid_args_returns_nonzero(capsys):
     @cli()
     def cmd(n: int):
         pass
 
     assert dispatch(["cmd", "notanint"]) != 0
-
-
-# --- help ---
 
 
 def test_help_lists_subcommands(capsys):
@@ -434,9 +413,6 @@ def test_trailing_underscore_flag(capsys):
     assert "TYPE_" not in out
 
 
-# --- commands() ---
-
-
 def test_commands_returns_sorted():
     @cli()
     def z():
@@ -451,9 +427,6 @@ def test_commands_returns_sorted():
 
 def test_commands_empty():
     assert commands() == []
-
-
-# --- selftest ---
 
 
 def test_selftest_passes_for_valid_commands(capsys):
@@ -497,9 +470,6 @@ def test_selftest_live_flag_runs_readonly(capsys):
     result = try_dispatch(["myapp", "selftest", "--live"])
     assert result == 0
     assert ran == [True]
-
-
-# --- meta ---
 
 
 def test_meta_stored():
@@ -609,9 +579,6 @@ def test_readonly_merges_with_meta():
     assert meta("app status") == {"audience": "them", "readonly": True}
     assert readonly("app status") is True
     assert where(audience="them", readonly=True) == ["app status"]
-
-
-# --- bare ---
 
 
 def test_bare_runs_on_empty_args(capsys):
@@ -739,9 +706,6 @@ def test_bare_with_params_missing_required(capsys):
     assert "required" in capsys.readouterr().out
 
 
-# --- help= per-param descriptions ---
-
-
 def test_help_dict_appears_in_argparse(capsys):
     @cli(help={"name": "who to greet", "loud": "shout it"})
     def greet(name: str, loud: bool = False):
@@ -752,9 +716,6 @@ def test_help_dict_appears_in_argparse(capsys):
     out = capsys.readouterr().out
     assert "who to greet" in out
     assert "shout it" in out
-
-
-# --- required= kwarg ---
 
 
 def test_required_kwarg_rejects_missing(capsys):
@@ -798,9 +759,6 @@ def test_required_kwarg_with_metavar(capsys):
     assert dispatch(["query"]) != 0
     assert dispatch(["query", "--type", "foo"]) == 0
     assert captured == ["foo"]
-
-
-# --- manifest ---
 
 
 def test_manifest_structure():
@@ -869,9 +827,6 @@ def test_help_dict_partial(capsys):
     assert "who to greet" in out
 
 
-# --- invoke ---
-
-
 def test_invoke_captures_stdout():
     @cli("testapp")
     def hello():
@@ -924,9 +879,6 @@ def test_invoke_repr():
     assert repr(result) == "Result(exit_code=0)"
 
 
-# --- completions ---
-
-
 def test_completions_bash_output_contains_compreply(capsys):
     @cli("myapp")
     def status():
@@ -959,9 +911,6 @@ def test_completions_fish_output_contains_complete_command(capsys):
     out = capsys.readouterr().out
     assert "complete" in out
     assert "myapp" in out
-
-
-# --- VAR_POSITIONAL (*args) ---
 
 
 def test_var_positional_single_arg():
@@ -1034,9 +983,6 @@ def test_completions_defaults_to_bash_when_no_shell_arg(capsys):
     try_dispatch(["myapp", "completions"])
     out = capsys.readouterr().out
     assert "COMPREPLY" in out
-
-
-# --- __complete ---
 
 
 def test_complete_returns_subcommands(capsys):
@@ -1122,9 +1068,6 @@ def test_autodiscover_init_no_double_register(tmp_path, monkeypatch):
     fncli.autodiscover(pkg_root, "pkg2")
 
 
-# --- passthrough ---
-
-
 def test_passthrough_collects_unknown_flags():
     @cli("app", passthrough=True)
     def launch(identity: str = "zealot", _rest: list[str] | None = None):
@@ -1183,3 +1126,66 @@ def test_passthrough_unknown_flag_with_value():
 
     invoke(["app", "run", "--session", "abc123"])
     assert captured["rest"] == ["--session", "abc123"]
+
+
+def test_equals_form_sets_string_flag():
+    captured = {}
+
+    @cli("app")
+    def run(name: str = "default"):
+        captured["name"] = name
+
+    invoke(["app", "run", "--name=custom"])
+    assert captured["name"] == "custom"
+
+
+def test_equals_form_on_bool_flag_raises():
+    @cli("app")
+    def run(verbose: bool = False):
+        pass
+
+    result = invoke(["app", "run", "--verbose=true"])
+    assert result.exit_code == 1
+    assert "does not take a value" in result.stderr
+
+
+def test_equals_form_unknown_flag_no_passthrough_raises():
+    @cli("app")
+    def run(name: str = "default"):
+        pass
+
+    result = invoke(["app", "run", "--bogus=value"])
+    assert result.exit_code == 1
+    assert "unknown flag" in result.stderr
+
+
+def test_equals_form_unknown_flag_passthrough_collects():
+    captured = {}
+
+    @cli("app", passthrough=True)
+    def run(name: str = "default", _rest: list[str] | None = None):
+        captured["rest"] = _rest
+
+    invoke(["app", "run", "--extra=value"])
+    assert captured["rest"] == ["--extra=value"]
+
+
+def test_equals_form_list_flag_appends():
+    captured = {}
+
+    @cli("app", flags={"tags": ["-t", "--tag"]})
+    def run(tags: list[str] | None = None):
+        captured["tags"] = tags
+
+    invoke(["app", "run", "--tag=a", "--tag=b"])
+    assert captured["tags"] == ["a", "b"]
+
+
+def test_named_value_flag_type_conversion_error_raises_usage_error():
+    @cli("app")
+    def run(count: int = 0):
+        pass
+
+    result = invoke(["app", "run", "--count", "notanumber"])
+    assert result.exit_code == 1
+    assert "--count" in result.stderr
