@@ -158,6 +158,22 @@ def test_bare_none_default_not_required():
     assert captured[-1] == "prod"
 
 
+def test_optional_int_default_none_coerces_type():
+    # str | None tests don't prove the union unwrap resolves the *right* arm,
+    # since str is also the fallback type on failure. int | None does.
+    captured: list[int | None] = []
+
+    @cli()
+    def limit(n: int | None = None):
+        captured.append(n)
+
+    assert dispatch(["limit"]) == 0
+    assert captured[-1] is None
+    assert dispatch(["limit", "--n", "5"]) == 0
+    assert captured[-1] == 5
+    assert isinstance(captured[-1], int)
+
+
 def test_list_positional():
     captured: list[list[str]] = []
 
