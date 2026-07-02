@@ -1189,3 +1189,68 @@ def test_named_value_flag_type_conversion_error_raises_usage_error():
     result = invoke(["app", "run", "--count", "notanumber"])
     assert result.exit_code == 1
     assert "--count" in result.stderr
+
+
+def test_bare_usage_shows_positional_and_flag_shape(capsys):
+    @cli("app")
+    def other():
+        """other cmd"""
+
+    @cli(name="app", bare=True)
+    def run(target: str, verbose: bool = False, count: int = 1):
+        """run it"""
+
+    try_dispatch(["app", "--help"])
+    out = capsys.readouterr().out
+    assert "usage: app <target> [--verbose] [--count COUNT]" in out
+
+
+def test_bare_usage_marks_optional_positional_without_angle_brackets(capsys):
+    @cli("app")
+    def other():
+        """other cmd"""
+
+    @cli(name="app", bare=True, flags={"target": []})
+    def run(target: str = "default"):
+        """run it"""
+
+    try_dispatch(["app", "--help"])
+    out = capsys.readouterr().out
+    assert "usage: app [target]" in out
+
+
+def test_group_order_renders_declared_groups_before_undeclared(capsys):
+    @cli("app", group="setup")
+    def init():
+        """init it"""
+
+    @cli("app", group="misc")
+    def extra():
+        """extra thing"""
+
+    @cli("app")
+    def plain():
+        """no group"""
+
+    fncli.set_group_order("app", ["setup"])
+    try_dispatch(["app", "--help"])
+    out = capsys.readouterr().out
+    setup_idx = out.index("setup")
+    misc_idx = out.index("misc")
+    plain_idx = out.index("plain")
+    assert setup_idx < misc_idx < plain_idx
+
+
+def test_collapse_commands_shows_subcommand_hint_for_multi_child_namespace(capsys):
+    @cli("app db")
+    def migrate():
+        """migrate it"""
+
+    @cli("app db")
+    def seed():
+        """seed it"""
+
+    try_dispatch(["app", "--help"])
+    out = capsys.readouterr().out
+    assert "db commands  (run `app db --help`)" in out
+    assert "migrate it" not in out
