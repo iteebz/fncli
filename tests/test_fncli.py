@@ -1282,6 +1282,36 @@ def test_var_positional_defaults_to_empty_tuple_when_no_extra_args():
     assert captured["rest"] == ()
 
 
+def test_record_timing_writes_jsonl_line(tmp_path, monkeypatch):
+    log = tmp_path / "cli_timings.jsonl"
+    monkeypatch.setattr(fncli, "_TIMING_LOG", log)
+    fncli._record_timing("app run", 0.25)
+    line = json.loads(log.read_text().strip())
+    assert line["cmd"] == "app run"
+    assert line["duration_ms"] == 250
+
+
+def test_record_timing_swallows_oserror(monkeypatch, capsys):
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fncli.Path, "mkdir", boom)
+    fncli._record_timing("app run", 0.1)  # must not raise
+    assert capsys.readouterr().err == ""
+
+
+def test_record_timing_emits_slow_warning_above_threshold(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(fncli, "_TIMING_LOG", tmp_path / "t.jsonl")
+    fncli._record_timing("app slow", fncli._SLOW_THRESHOLD_S + 0.1)
+    assert "slow" in capsys.readouterr().err
+
+
+def test_record_timing_no_warning_below_threshold(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(fncli, "_TIMING_LOG", tmp_path / "t.jsonl")
+    fncli._record_timing("app fast", fncli._SLOW_THRESHOLD_S - 0.1)
+    assert capsys.readouterr().err == ""
+
+
 def test_subcommand_matches_true_for_registered_child():
     @cli("app db")
     def migrate():
