@@ -1241,6 +1241,31 @@ def test_group_order_renders_declared_groups_before_undeclared(capsys):
     assert setup_idx < misc_idx < plain_idx
 
 
+def test_var_positional_splats_after_preceding_positional():
+    captured = {}
+
+    @cli("app")
+    def run(name: str, *rest: str):
+        captured["name"] = name
+        captured["rest"] = rest
+
+    result = invoke(["app", "run", "alice", "x", "y"])
+    assert result.exit_code == 0
+    assert captured["name"] == "alice"
+    assert captured["rest"] == ("x", "y")
+
+
+def test_var_positional_defaults_to_empty_tuple_when_no_extra_args():
+    captured = {}
+
+    @cli("app")
+    def run(name: str, *rest: str):
+        captured["rest"] = rest
+
+    invoke(["app", "run", "alice"])
+    assert captured["rest"] == ()
+
+
 def test_collapse_commands_shows_subcommand_hint_for_multi_child_namespace(capsys):
     @cli("app db")
     def migrate():
