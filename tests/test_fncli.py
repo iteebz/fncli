@@ -1282,6 +1282,22 @@ def test_var_positional_defaults_to_empty_tuple_when_no_extra_args():
     assert captured["rest"] == ()
 
 
+def test_subcommand_matches_true_for_registered_child():
+    @cli("app db")
+    def migrate():
+        pass
+
+    assert fncli._subcommand_matches("app", "db") is True
+
+
+def test_subcommand_matches_false_for_unrelated_token():
+    @cli("app db")
+    def migrate():
+        pass
+
+    assert fncli._subcommand_matches("app", "nope") is False
+
+
 def test_collapse_commands_shows_subcommand_hint_for_multi_child_namespace(capsys):
     @cli("app db")
     def migrate():
